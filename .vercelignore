@@ -1,0 +1,9 @@
+node_modules
+.git
+tests
+coverage
+*.log
+storage
+.env
+.env.*
+.vercel

@@ -1,0 +1,197 @@
+// ============================================================================
+// DEV AUTH PROVIDER — used ONLY when Supabase credentials are absent and the
+// application runs in demo/development mode (config.js refuses this in
+// production). It mirrors the subset of the Supabase Auth API used by
+// src/auth.js so that the rest of the application is identical in both modes.
+//
+// This is NOT the production authentication system. Production always uses
+// Supabase Auth (GoTrue): no password hashes are stored by this application in
+// Supabase mode.
+// ============================================================================
+import { createHmac, randomUUID, scryptSync, timingSafeEqual, randomBytes } from 'node:crypto';
+import { AppError } from './errors.js';
+
+const SCRYPT_KEYLEN = 64;
+
+export function createDevAuthProvider(db, config, { logger } = {}) {
+  const users = db.store.devUsers; // email -> user record
+  const refreshTokens = new Map(); // token -> { userId, expiresAt }
+  const resetTokens = new Map(); // token -> { email, expiresAt }
+
+  if (config.isProduction) throw new Error('dev auth provider must not be used in production');
+  logger?.warn?.('DEV AUTH PROVIDER ACTIVE — passwords are stored in memory for the local demo only');
+
+  const hmacKey = config.encryptionKey;
+  const sign = (payload) => {
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const sig = createHmac('sha256', hmacKey).update(body).digest('base64url');
+    return `${body}.${sig}`;
+  };
+  const verify = (token) => {
+    const [body, sig] = String(token || '').split('.');
+    if (!body || !sig) return null;
+    const expected = createHmac('sha256', hmacKey).update(body).digest('base64url');
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+    try {
+      const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+      if (!payload.exp || payload.exp * 1000 < Date.now()) return null;
+      return payload;
+    } catch {
+      return null;
+    }
+  };
+
+  const makePasswordHash = (password) => {
+    const salt = randomBytes(16).toString('hex');
+    const hash = scryptSync(password, salt, SCRYPT_KEYLEN).toString('hex');
+    return `${salt}:${hash}`;
+  };
+  const checkPassword = (password, stored) => {
+    const [salt, hash] = String(stored || '').split(':');
+    if (!salt || !hash) return false;
+    const candidate = scryptSync(password, salt, SCRYPT_KEYLEN).toString('hex');
+    const a = Buffer.from(candidate, 'hex');
+    const b = Buffer.from(hash, 'hex');
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+
+  const publicUser = (record) => ({
+    id: record.id,
+    email: record.email,
+    email_confirmed_at: record.emailConfirmedAt,
+    user_metadata: record.metadata || {}
+  });
+
+  const issueSession = (record) => {
+    const accessExpires = Math.floor(Date.now() / 1000) + 60 * 60;
+    const accessToken = sign({ sub: record.id, email: record.email, exp: accessExpires, typ: 'access' });
+    const refreshToken = randomBytes(32).toString('base64url');
+    refreshTokens.set(refreshToken, { userId: record.id, expiresAt: Date.now() + 30 * 86400000 });
+    return {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: accessExpires,
+      expires_in: 3600,
+      token_type: 'bearer',
+      user: publicUser(record)
+    };
+  };
+
+  const findByToken = (accessToken) => {
+    const payload = verify(accessToken);
+    if (!payload) return null;
+    const record = [...users.values()].find((u) => u.id === payload.sub);
+    return record ? publicUser(record) : null;
+  };
+
+  return {
+    kind: 'dev',
+
+    async signUp({ email, password, metadata }) {
+      const key = String(email).toLowerCase();
+      if (users.has(key)) {
+        // Supabase returns an obfuscated user instead of leaking existence; mirror that.
+        return { user: { id: randomUUID(), email: key, email_confirmed_at: null }, session: null, obfuscated: true };
+      }
+      const record = {
+        id: randomUUID(),
+        email: key,
+        passwordHash: makePasswordHash(password),
+        emailConfirmedAt: new Date().toISOString(), // demo mode: verification is simulated
+        metadata: metadata || {},
+        createdAt: new Date().toISOString()
+      };
+      users.set(key, record);
+      return { user: publicUser(record), session: issueSession(record) };
+    },
+
+    async signIn({ email, password }) {
+      const record = users.get(String(email).toLowerCase());
+      if (!record || !checkPassword(password, record.passwordHash)) {
+        const err = new Error('Email atau password salah');
+        err.supabaseCode = 'invalid_credentials';
+        err.status = 400;
+        throw err;
+      }
+      return issueSession(record);
+    },
+
+    async refresh(refreshToken) {
+      const entry = refreshTokens.get(refreshToken);
+      if (!entry || entry.expiresAt < Date.now()) throw new Error('refresh token tidak valid');
+      const record = [...users.values()].find((u) => u.id === entry.userId);
+      if (!record) throw new Error('pengguna tidak ditemukan');
+      refreshTokens.delete(refreshToken); // rotation
+      return issueSession(record);
+    },
+
+    async getUser(accessToken) {
+      return findByToken(accessToken);
+    },
+
+    async updatePassword(accessToken, password) {
+      const user = findByToken(accessToken);
+      if (!user) throw new AppError('UNAUTHORIZED', 'Token reset tidak valid atau kedaluwarsa.', 401);
+      const record = users.get(user.email);
+      if (!record) throw new AppError('NOT_FOUND', 'Pengguna tidak ditemukan.', 404);
+      record.passwordHash = makePasswordHash(password);
+      return publicUser(record);
+    },
+
+    async sendPasswordReset(email) {
+      const key = String(email).toLowerCase();
+      const record = users.get(key);
+      if (!record) return { sent: true }; // never leak account existence
+      const token = randomBytes(32).toString('base64url');
+      resetTokens.set(token, { email: key, expiresAt: Date.now() + 30 * 60 * 1000 });
+      const url = `${config.appUrl}/reset-password?token=${encodeURIComponent(token)}`;
+      logger?.info?.('dev password reset link generated (demo mode only)', { url });
+      return { sent: true, devResetUrl: config.demoMode ? url : undefined };
+    },
+
+    async resendVerification() {
+      return { sent: true, simulated: true };
+    },
+
+    async verifyOtp() {
+      throw new AppError('NOT_SUPPORTED', 'Verifikasi token tidak tersedia pada mode demo.', 400);
+    },
+
+    async consumeResetToken(token, password) {
+      const entry = resetTokens.get(token);
+      if (!entry || entry.expiresAt < Date.now()) {
+        throw new AppError('UNAUTHORIZED', 'Token reset tidak valid atau sudah kedaluwarsa.', 401);
+      }
+      const record = users.get(entry.email);
+      if (!record) throw new AppError('NOT_FOUND', 'Pengguna tidak ditemukan.', 404);
+      record.passwordHash = makePasswordHash(password);
+      resetTokens.delete(token);
+      refreshTokens.forEach((value, key) => {
+        if (value.userId === record.id) refreshTokens.delete(key);
+      });
+      return { ok: true };
+    },
+
+    async signOut() {
+      return { ok: true };
+    },
+
+    /** Demo helper used by the seed script only. */
+    _seedUser({ email, password, role = 'user' }) {
+      const key = email.toLowerCase();
+      const record = {
+        id: randomUUID(),
+        email: key,
+        passwordHash: makePasswordHash(password),
+        emailConfirmedAt: new Date().toISOString(),
+        metadata: {},
+        createdAt: new Date().toISOString()
+      };
+      users.set(key, record);
+      const { profile } = db._insertUser({ id: record.id, email: key, role, balance: 0 });
+      return { record, profile };
+    }
+  };
+}
