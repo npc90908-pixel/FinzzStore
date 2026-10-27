@@ -127,6 +127,9 @@ export function fromDbError(error, context = {}) {
 
   // 3. Heuristics for errors that arrive without a usable code.
   const haystack = `${pgMessage} ${pgDetails}`.toLowerCase();
+  if (/emaxconnsession|max clients reached|too many clients|remaining connection slots/.test(haystack)) {
+    return new DbError('DB_UNAVAILABLE', DB_FAILURE_MAP.PGRST000[2], 503, diagnostic);
+  }
   if (/could not find the function|function .* does not exist|schema cache/.test(haystack)) {
     return new DbError('DB_FUNCTION_MISSING', DB_FAILURE_MAP.PGRST202[2], 503, diagnostic);
   }

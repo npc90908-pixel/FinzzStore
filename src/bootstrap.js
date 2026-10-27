@@ -28,9 +28,23 @@ import { createRateLimiter } from './security.js';
 import { mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
+function isSupabaseSessionPooler(connectionString) {
+  try {
+    const url = new URL(connectionString);
+    return url.hostname.toLowerCase().endsWith('.pooler.supabase.com') && url.port === '5432';
+  } catch {
+    return false;
+  }
+}
+
 export async function createApplication({ env = process.env, logger, supplierOptions = null, paymentOptions = null } = {}) {
   if (!logger) throw new Error('createApplication requires a logger');
   const config = loadConfig(env);
+  if (config.isVercel && isSupabaseSessionPooler(config.database.connectionString)) {
+    logger.warn(
+      'Supabase session-mode pooler detected on Vercel; use the transaction-mode DATABASE_URL (port 6543) to avoid the session client limit.'
+    );
+  }
 
   // Custom authentication is the only auth path now: Supabase Auth is not used
   // anywhere. A real deployment must supply DATABASE_URL; the in-memory driver
@@ -42,10 +56,25 @@ export async function createApplication({ env = process.env, logger, supplierOpt
     db = createMemoryDatabase({ logger });
   }
 
-  await db.ping().catch((err) => {
-    logger.error('database health check failed at boot', { error: err.message });
-    if (config.isProduction) throw err;
-  });
+  // A Vercel cold start is not a readiness probe. Pinging here adds a database
+  // round-trip to every cold start and makes a transient pooler limit prevent
+  // the whole app from initializing (including routes that can degrade
+  // gracefully). Health routes still perform their own explicit checks.
+  if (!config.isVercel) {
+    try {
+      await db.ping();
+    } catch (err) {
+      logger.error('database health check failed at boot', { error: err.message });
+      if (config.isProduction) {
+        // createApplication may be retried after a failed startup; close the
+        // pool before propagating so failed starts cannot leak clients.
+        await db.close().catch((closeError) => {
+          logger.warn('database pool cleanup after failed boot failed', { error: closeError.message });
+        });
+        throw err;
+      }
+    }
+  }
 
   await mkdir(config.storageDir, { recursive: true, mode: 0o700 });
 

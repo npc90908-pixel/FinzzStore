@@ -31,6 +31,7 @@ export class ConfigError extends Error {
 export function loadConfig(env = process.env) {
   const nodeEnv = env.NODE_ENV || 'development';
   const isProduction = nodeEnv === 'production';
+  const isVercel = bool(env.VERCEL, false);
   const demoRequested = bool(env.DEMO_MODE, false);
 
   // The application owns its PostgreSQL connection now; Supabase Auth is gone,
@@ -207,6 +208,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     nodeEnv,
     isProduction,
+    isVercel,
     demoMode,
     demo: Object.freeze({
       // Seeding is skipped for the automated tests (JOBS/test harness) and can be
@@ -252,9 +254,18 @@ export function loadConfig(env = process.env) {
         if (mode === 'no-verify') return { rejectUnauthorized: false };
         return { rejectUnauthorized: true };
       })(),
-      poolMax: int(env.DATABASE_POOL_MAX, 10, { min: 1, max: 50 }),
+      // Vercel creates many short-lived function instances. Keep one client per
+      // instance and release it quickly; a larger local pool multiplies against
+      // Supabase's small session-mode client limit when the function scales.
+      poolMax: int(env.DATABASE_POOL_MAX, isVercel ? 1 : 10, {
+        min: 1,
+        max: isVercel ? 1 : 50
+      }),
       connectionTimeoutMs: int(env.DATABASE_CONNECTION_TIMEOUT, 8000, { min: 1000, max: 60000 }),
-      idleTimeoutMs: int(env.DATABASE_IDLE_TIMEOUT, 30000, { min: 5000, max: 300000 }),
+      idleTimeoutMs: int(env.DATABASE_IDLE_TIMEOUT, isVercel ? 5000 : 30000, {
+        min: 5000,
+        max: isVercel ? 5000 : 300000
+      }),
       statementTimeoutMs: int(env.DATABASE_STATEMENT_TIMEOUT, 15000, { min: 1000, max: 60000 })
     }),
 
