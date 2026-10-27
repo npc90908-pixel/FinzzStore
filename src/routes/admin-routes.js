@@ -124,8 +124,18 @@ export function registerAdminRoutes({ router }) {
       // Cron) and coordinate through public.cron_locks. Without this the admin
       // has no way to tell "the schedule stopped firing" from "nothing to do".
       cron: await ctx.db.cron.status().catch(() => []),
-      payment: ctx.services.payment.status()
+      payment: ctx.services.payment.status(),
+      smtp: ctx.services.mailer?.status?.() || { configured: false, lastCheck: null }
     });
+  });
+
+  // -------------------------------------------------------------- email/SMTP
+  // SMTP diagnostics are admin-only and deliberately return normalized codes,
+  // never provider response text, passwords, or bearer-like credentials.
+  router.post('/api/admin/smtp/verify', async (ctx) => {
+    const session = await admin(ctx);
+    await enforceLimit(ctx, `admin:smtp-verify:${session.user.id}`, 3, 60);
+    return ok(await ctx.services.mailer.verify());
   });
 
   // ------------------------------------------------------- supplier (TeleKos)

@@ -1,21 +1,23 @@
 // ============================================================================
 // REGISTER PAGE
 // ============================================================================
-import { el, Input, Button, Alert, Checkbox, runWithLoading, clearFormErrors, fieldError, toast } from '../ui.js';
+import { el, Input, Button, Alert, Checkbox, runWithLoading, clearFormErrors, fieldError, toast, setChildren } from '../ui.js';
 import { icon } from '../icons.js';
 import { ApiError } from '../api.js';
 import { mountTurnstile, turnstileConfig } from '../turnstile.js';
+import { authPageShell, authDivider, googleOAuthButton, withPasswordVisibility } from './_auth-ui.js';
 
 export default async function register(ctx) {
-  const { api, store, navigate, layout } = ctx;
+  const { api, store, navigate, query, layout } = ctx;
+  const next = query.get('next') || '/wallet';
 
-  const form = el('form', { class: 'auth-card', attrs: { novalidate: true } });
-  const errorBox = el('div', { attrs: { hidden: true } });
+  const form = el('form', { class: 'auth-card auth-card--register', attrs: { novalidate: true } });
+  const errorBox = el('div', { class: 'auth-feedback', attrs: { hidden: true, role: 'status', 'aria-live': 'polite' } });
 
-  const email = Input({ label: 'Email', name: 'email', type: 'email', autocomplete: 'email', required: true, placeholder: 'nama@email.com' });
+  const email = Input({ label: 'Email', name: 'email', type: 'email', autocomplete: 'email', required: true, placeholder: 'nama@domain.com' });
   const username = Input({ label: 'Username (opsional)', name: 'username', autocomplete: 'username', placeholder: 'huruf, angka, garis bawah', maxlength: 24 });
-  const password = Input({ label: 'Password', name: 'password', type: 'password', autocomplete: 'new-password', required: true, hint: 'Minimal 8 karakter, kombinasi huruf dan angka.' });
-  const confirm = Input({ label: 'Ulangi password', name: 'confirm', type: 'password', autocomplete: 'new-password', required: true });
+  const password = withPasswordVisibility(Input({ label: 'Password', name: 'password', type: 'password', autocomplete: 'new-password', required: true, hint: 'Minimal 8 karakter, kombinasi huruf dan angka.' }));
+  const confirm = withPasswordVisibility(Input({ label: 'Ulangi password', name: 'confirm', type: 'password', autocomplete: 'new-password', required: true, placeholder: 'Masukkan kembali password' }));
   const terms = Checkbox({ label: 'Saya menyetujui Ketentuan Layanan dan Kebijakan Privasi FINZZ Store.', name: 'terms', required: true });
   const submit = Button({ variant: 'primary', size: 'lg', block: true, type: 'submit', children: 'Buat akun' });
 
@@ -27,15 +29,14 @@ export default async function register(ctx) {
   if (tsConfig.enabled) {
     captcha = await mountTurnstile(captchaBox, { siteKey: tsConfig.siteKey, action: 'register' });
   }
-
-  form.append(
+  const googleOAuthEnabled = Boolean(publicSettings?.app?.oauth?.google);
+  setChildren(form,
     el('div', { class: 'auth-card__head' },
-      el('span', { class: 'feature-tile feature-tile--lg feature-tile--mint auth-card__icon' }, icon('users', { size: 22 })),
-      el('a', { class: 'brand', attrs: { href: '/' }, onClick: (e) => { e.preventDefault(); navigate('/'); } },
-        icon('arrowRight', { size: 15 }), el('span', { text: 'Kembali ke beranda' })),
-      el('h1', { class: 'auth-card__title', text: 'Buat akun FINZZ Store' }),
-      el('p', { class: 'auth-card__lead', text: 'Registrasi gratis. Anda hanya perlu mengisi saldo ketika ingin membeli nomor.' })
+      el('span', { class: 'auth-card__eyebrow' }, icon('users', { size: 14 }), el('span', { text: 'BUAT AKUN FINZZ' })),
+      el('h1', { class: 'auth-card__title', text: 'Mulai dengan akun baru' }),
+      el('p', { class: 'auth-card__lead', text: 'Daftar gratis untuk mengelola nomor virtual, OTP, dan transaksi.' })
     ),
+    ...(googleOAuthEnabled ? [googleOAuthButton({ next }), authDivider()] : []),
     errorBox,
     email,
     username,
@@ -46,7 +47,7 @@ export default async function register(ctx) {
     submit,
     el('div', { class: 'auth-footer' },
       el('span', { text: 'Sudah punya akun?' }),
-      el('a', { attrs: { href: '/login' }, text: 'Masuk', onClick: (e) => { e.preventDefault(); navigate('/login'); } })
+      el('a', { attrs: { href: '/login' }, text: 'Masuk ke akun', onClick: (e) => { e.preventDefault(); navigate('/login'); } })
     )
   );
 
@@ -77,6 +78,7 @@ export default async function register(ctx) {
       try {
         const turnstileToken = captcha?.token() || null;
         if (captcha?.enabled && !turnstileToken) {
+          errorBox.removeAttribute('hidden');
           return errorBox.replaceChildren(Alert({ tone: 'danger', title: 'Verifikasi keamanan', children: captcha.error || 'Selesaikan verifikasi keamanan terlebih dahulu.' }));
         }
         const result = await api.post('/api/auth/register', {
@@ -120,18 +122,7 @@ export default async function register(ctx) {
     }, { loadingLabel: 'Membuat akun…' });
   });
 
-  const side = el('aside', { class: 'auth-side' },
-    el('p', { class: 'auth-side__quote', text: 'Mulai dari verifikasi akun yang paling sering: WhatsApp, Telegram, dan Google.' }),
-    el('ul', { class: 'auth-list' },
-      el('li', {}, icon('check', { size: 16 }), el('span', { text: 'Tanpa biaya pendaftaran, tanpa langganan.' })),
-      el('li', {}, icon('check', { size: 16 }), el('span', { text: 'Harga transparan: markup ditampilkan sebelum konfirmasi.' })),
-      el('li', {}, icon('check', { size: 16 }), el('span', { text: 'Deposit manual diverifikasi admin, saldo hanya masuk setelah bukti sah.' }))
-    )
-  );
-
-  const node = el('div', {}, layout.header({ variant: 'public' }),
-    el('div', { class: 'auth-layout' }, el('div', { class: 'auth-panel' }, form), side)
-  );
+  const node = authPageShell({ layout, form, mode: 'register' });
 
   return { node, title: 'Daftar — FINZZ Store' };
 }

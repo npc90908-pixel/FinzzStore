@@ -131,11 +131,11 @@ function baseRoutes(extra = []) {
   ];
 }
 
-function makeCtx({ user = { id: 'u1', email: 'user@finzz.test', role: 'admin' }, pathname = '/', search = '', api, publicSettings = FIXTURES.config } = {}) {
+function makeCtx({ user = { id: 'u1', email: 'user@finzz.test', role: 'admin' }, pathname = '/', search = '', api, publicSettings = FIXTURES.config, config = FIXTURES.config } = {}) {
   const { createStore } = globalThis.__finzzStore;
   const store = createStore({
     user,
-    config: FIXTURES.config,
+    config,
     csrfToken: 'csrf-token',
     publicSettings,
     balance: 96780,
@@ -161,6 +161,16 @@ function makeCtx({ user = { id: 'u1', email: 'user@finzz.test', role: 'admin' },
   };
 }
 
+function assertNoVisibleNullText(root, label) {
+  const matches = [];
+  const visit = (node) => {
+    if (node.nodeType === 3 && /\bnull\b/i.test(node.nodeValue || '')) matches.push(node.nodeValue.trim());
+    for (const child of Array.from(node.childNodes || [])) visit(child);
+  };
+  visit(root);
+  assert.deepEqual(matches, [], `${label} must not render a visible null text node`);
+}
+
 test.before?.(() => {});
 
 test('page modules render against a DOM with fixtures', async () => {
@@ -180,10 +190,25 @@ test('page modules render against a DOM with fixtures', async () => {
   try {
     // ------------------------------------------------------------------ login
     {
-      const ctx = makeCtx({ api, user: null, pathname: '/login' });
+      const ctx = makeCtx({ api, user: null, pathname: '/login', config: { ...FIXTURES.config, demoAccounts: null } });
       const rendered = await (await page('login'))(ctx);
-      assert.ok(!rendered.node.outerHTML.includes('>null<'), 'empty optional content never leaks a visible "null"');
+      assertNoVisibleNullText(rendered.node, 'login with no demo accounts or OAuth settings');
       assert.equal(rendered.node.querySelector('.oauth-login__button'), null, 'Google sign-in is hidden when OAuth is not configured');
+      const password = rendered.node.querySelector('input[name="password"]');
+      const visibilityToggle = rendered.node.querySelector('.auth-password__toggle');
+      assert.equal(password.type, 'password');
+      visibilityToggle.dispatchEvent(new Event('click', { bubbles: true }));
+      assert.equal(password.type, 'text', 'the password can be revealed');
+      assert.equal(visibilityToggle.getAttribute('aria-pressed'), 'true');
+      visibilityToggle.dispatchEvent(new Event('click', { bubbles: true }));
+      assert.equal(password.type, 'password', 'the password can be hidden again');
+      assert.match(rendered.node.querySelector('.auth-side--showcase').textContent, /Akun terlindungi/);
+      const headerMark = rendered.node.querySelector('.topbar .brand__mark svg')?.outerHTML;
+      const footerMark = ctx.layout.footer().querySelector('.brand__mark svg')?.outerHTML;
+      assert.ok(headerMark && footerMark);
+      assert.equal(headerMark, footerMark, 'header and footer share the redesigned FINZZ mark');
+      assert.match(headerMark, /stroke="#7c8cff"/);
+      assert.match(headerMark, /stroke="#2ee6b6"/);
       rendered.cleanup?.();
     }
     {
@@ -196,7 +221,9 @@ test('page modules render against a DOM with fixtures', async () => {
       const googleButton = rendered.node.querySelector('.oauth-login__button');
       assert.ok(googleButton, 'Google sign-in appears only for a configured OAuth integration');
       assert.equal(googleButton.getAttribute('href'), '/api/auth/google?next=%2Fwallet');
+      assert.equal(googleButton.querySelector('img')?.getAttribute('src'), '/assets/brands/google.svg', 'OAuth uses the local multicolor Google brand asset');
       assert.match(rendered.node.textContent, /Login Google dibatalkan/i);
+      assertNoVisibleNullText(rendered.node, 'login with Google and an OAuth error');
       rendered.cleanup?.();
     }
 
@@ -211,6 +238,16 @@ test('page modules render against a DOM with fixtures', async () => {
       assert.ok(!/%\s*uptime/i.test(html), 'no invented uptime claim');
       assert.ok(!/99[,.]\d\s*%/.test(html), 'no invented success-rate claim');
       assert.match(html, /WA|WhatsApp/, 'live catalogue is rendered');
+      const marquee = rendered.node.querySelector('.brand-marquee');
+      assert.ok(marquee && !marquee.hasAttribute('hidden'), 'a real one-app catalogue still gets a scrolling brand strip');
+      const track = marquee.querySelector('.brand-marquee__track');
+      assert.match(track.style.getPropertyValue('--marquee-duration'), /^\d+(?:\.\d+)?s$/, 'the continuous scroll duration is applied as a CSS custom property');
+      const groups = Array.from(marquee.querySelectorAll('.brand-marquee__group'));
+      assert.ok(groups.length >= 4, 'the animation repeats the real group enough times to cover the viewport');
+      assert.equal(groups[0].hasAttribute('aria-hidden'), false, 'one unique catalogue group remains accessible');
+      assert.equal(groups[0].querySelectorAll('.brand-chip').length, 1);
+      assert.ok(groups.slice(1).every((group) => group.getAttribute('aria-hidden') === 'true'), 'visual loop copies are hidden from assistive technology');
+      assert.equal(groups[0].querySelector('.brand-chip__logo')?.getAttribute('src'), '/assets/brands/whatsapp.svg');
       rendered.cleanup?.();
     }
 
@@ -347,6 +384,7 @@ test('page modules render against a DOM with fixtures', async () => {
       const ctx = makeCtx({ api, user: null, pathname: `/${name}` });
       const rendered = await (await page(name))(ctx);
       assert.ok(rendered.node.outerHTML.length > 200, `${name} renders`);
+      assertNoVisibleNullText(rendered.node, name);
       rendered.cleanup?.();
     }
   } finally {

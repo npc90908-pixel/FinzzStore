@@ -5,10 +5,9 @@
 // assets, API routing, page rendering, error handling. API 404s always return
 // JSON; unknown page paths fall back to the SPA shell with a 404 status.
 // ============================================================================
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { requestId, readJson, sendJson, sendError, sendHtml, cookies } from './http.js';
 import { securityHeaders, assertRequestOrigin, requestOriginAllowed, clientIp } from './security.js';
 import { AppError, errors } from './errors.js';
@@ -48,26 +47,31 @@ export function createApp({ config, logger, db, auth, services, router }) {
 
     const info = await stat(absolute).catch(() => null);
     if (!info?.isFile()) throw errors.notFound('Aset');
+    const body = await readFile(absolute).catch(() => null);
+    if (!body) throw errors.notFound('Aset');
 
-    const etag = `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
-    if (req.headers['if-none-match'] === etag) {
-      res.writeHead(304, { ETag: etag });
+    // Size + second-resolution mtime collides when a same-size asset is
+    // replaced within one second. A content hash gives browsers a reliable
+    // validator, so updated brand marks and CSS cannot remain stale in cache.
+    const etag = `"${createHash('sha256').update(body).digest('base64url')}"`;
+    const validators = String(req.headers['if-none-match'] || '').split(',').map((value) => value.trim());
+    if (validators.includes('*') || validators.includes(etag) || validators.includes(`W/${etag}`)) {
+      res.writeHead(304, {
+        ETag: etag,
+        'Cache-Control': 'public, max-age=0, must-revalidate'
+      });
       res.end();
       return true;
     }
 
     res.writeHead(200, {
       'Content-Type': MIME[ext],
-      'Content-Length': info.size,
+      'Content-Length': body.byteLength,
       ETag: etag,
       'Cache-Control': 'public, max-age=0, must-revalidate',
       'X-Content-Type-Options': 'nosniff'
     });
-    if (req.method === 'HEAD') {
-      res.end();
-      return true;
-    }
-    createReadStream(absolute).pipe(res);
+    res.end(req.method === 'HEAD' ? undefined : body);
     return true;
   };
 

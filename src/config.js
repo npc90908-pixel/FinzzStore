@@ -80,6 +80,38 @@ export function loadConfig(env = process.env) {
     throw new ConfigError('APP_URL must be an https:// URL in production (Cloudflare Tunnel).');
   }
 
+  const storeName = String(env.STORE_NAME || 'FINZZ Store').trim() || 'FINZZ Store';
+  const smtpHost = String(env.SMTP_HOST || '').trim();
+  const smtpPort = int(env.SMTP_PORT, 587, { min: 1, max: 65535 });
+  const smtpUser = String(env.SMTP_USER || '').trim();
+  let smtpPass = String(env.SMTP_PASS || '').trim();
+  const smtpFromInput = String(env.SMTP_FROM || '').trim();
+  const smtpIntent = Boolean(smtpHost || smtpUser || smtpPass || smtpFromInput);
+  let smtpConfigError = null;
+  if (smtpIntent && !smtpHost) {
+    smtpConfigError = {
+      code: 'SMTP_HOST_REQUIRED',
+      hint: 'SMTP_HOST wajib diisi saat ada kredensial atau alamat pengirim SMTP.'
+    };
+  } else if (Boolean(smtpUser) !== Boolean(smtpPass)) {
+    smtpConfigError = {
+      code: 'SMTP_AUTH_PAIR_REQUIRED',
+      hint: 'SMTP_USER dan SMTP_PASS harus diisi berpasangan, atau keduanya dikosongkan untuk relay tanpa autentikasi.'
+    };
+  } else if (smtpHost && !smtpFromInput && !smtpUser) {
+    smtpConfigError = {
+      code: 'SMTP_SENDER_REQUIRED',
+      hint: 'Isi SMTP_FROM, atau isi SMTP_USER dan SMTP_PASS agar alamat pengirim dapat mengikuti akun SMTP.'
+    };
+  }
+  // Gmail displays app passwords in groups for readability; SMTP expects the
+  // contiguous 16-character value. Do not alter passwords for other providers.
+  if (/gmail\.com$/i.test(smtpHost)) smtpPass = smtpPass.replace(/\s+/g, '');
+  const smtpFrom = smtpFromInput || (smtpUser ? `${storeName} <${smtpUser}>` : '');
+  // Port 465 is implicit TLS; port 587 always negotiates STARTTLS. Ignore an
+  // old SMTP_SECURE=true on 587 instead of silently switching to the wrong protocol.
+  const smtpSecure = smtpPort === 465 || (smtpPort !== 587 && bool(env.SMTP_SECURE, false));
+
   const allowedOrigins = (env.ALLOWED_ORIGINS || '')
     .split(',')
     .map((o) => o.trim())
@@ -217,12 +249,13 @@ export function loadConfig(env = process.env) {
 
     // ------------------------------------------------------------- SMTP
     smtp: Object.freeze({
-      host: (env.SMTP_HOST || '').trim(),
-      port: int(env.SMTP_PORT, 587, { min: 1, max: 65535 }),
-      secure: bool(env.SMTP_SECURE, false),
-      user: env.SMTP_USER || '',
-      pass: env.SMTP_PASS || '',
-      from: (env.SMTP_FROM || '').trim(),
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      user: smtpUser,
+      pass: smtpPass,
+      from: smtpFrom,
+      configError: smtpConfigError ? Object.freeze({ ...smtpConfigError }) : null,
       timeoutMs: int(env.SMTP_TIMEOUT_MS, 10000, { min: 2000, max: 60000 })
     }),
 
@@ -249,7 +282,7 @@ export function loadConfig(env = process.env) {
       available: bool(env.GOOGLE_OAUTH_ENABLED, googleCredentialCount === 2) && googleCredentialCount === 2
     }),
 
-    storeName: (env.STORE_NAME || 'FINZZ Store').trim(),
+    storeName,
 
     encryptionKey,
     cookie: Object.freeze({

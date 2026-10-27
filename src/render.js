@@ -7,7 +7,7 @@
 // ============================================================================
 import { escapeHtml, safeJsonForHtml } from './security.js';
 
-const CSS_FILES = ['/css/tokens.css', '/css/style.css', '/css/components.css', '/css/effects.css', '/css/skeleton.css', '/css/responsive.css'];
+const CSS_FILES = ['/css/tokens.css', '/css/style.css', '/css/components.css', '/css/effects.css', '/css/skeleton.css', '/css/responsive.css', '/css/auth.css'];
 
 export function renderDocument({
   page,

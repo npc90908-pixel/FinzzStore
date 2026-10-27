@@ -52,6 +52,57 @@ export default async function adminPage(ctx) {
       const data = await api.get('/api/admin/dashboard');
       const supplier = data.supplier || {};
       const catalog = data.catalog || {};
+      const smtp = data.smtp || { configured: false };
+      const smtpMessage = (result) => {
+        const lastCheck = result?.lastCheck || result;
+        const diagnostic = result?.diagnostic || lastCheck?.diagnostic;
+        if (result?.ok === true || lastCheck?.ok === true) {
+          return Alert({ tone: 'success', title: 'Koneksi SMTP siap', children: 'Koneksi, TLS, dan autentikasi berhasil diverifikasi.' });
+        }
+        if (!result?.configured) {
+          const title = diagnostic?.code && diagnostic.code !== 'SMTP_NOT_CONFIGURED'
+            ? 'Konfigurasi SMTP belum lengkap'
+            : 'SMTP belum dikonfigurasi';
+          return Alert({ tone: 'warning', title, children: diagnostic?.hint || 'Isi host, sender, dan pasangan kredensial SMTP di environment server.' });
+        }
+        if (diagnostic) {
+          return Alert({ tone: 'danger', title: `SMTP bermasalah · ${diagnostic.code}`, children: diagnostic.hint || 'Periksa konfigurasi SMTP dan coba lagi.' });
+        }
+        return Alert({ tone: 'info', title: 'Konfigurasi ditemukan', children: 'Klik “Uji koneksi” untuk memeriksa jaringan, TLS, dan autentikasi SMTP.' });
+      };
+      const smtpMessageSlot = el('div', { class: 'smtp-diagnostic', attrs: { 'aria-live': 'polite' } }, smtpMessage(smtp));
+      const verifySmtp = Button({
+        size: 'sm',
+        variant: 'outline',
+        disabled: !smtp.configured,
+        title: smtp.configured ? 'Uji koneksi, TLS, dan autentikasi SMTP' : 'Lengkapi konfigurasi SMTP sebelum menguji koneksi',
+        children: 'Uji koneksi',
+        onClick: async () => {
+          await runWithLoading(verifySmtp, async () => {
+            try {
+              const result = await api.post('/api/admin/smtp/verify', {});
+              smtpMessageSlot.replaceChildren(smtpMessage(result));
+            } catch (err) {
+              smtpMessageSlot.replaceChildren(Alert({ tone: 'danger', title: 'Uji SMTP gagal', children: err instanceof ApiError ? err.message : 'Coba lagi.' }));
+            }
+          }, { loadingLabel: 'Menguji…' });
+        }
+      });
+      const smtpCard = Card({
+        title: 'Email & SMTP',
+        subtitle: 'Kode verifikasi dan tautan reset password',
+        actions: verifySmtp,
+        children: el('div', { class: 'stack' },
+          KeyValue({ items: [
+            { label: 'Status', value: Badge({ tone: smtp.configured ? 'success' : 'warning', dot: true, children: smtp.configured ? 'konfigurasi ditemukan' : 'belum dikonfigurasi' }) },
+            { label: 'Host', value: smtp.host || '—' },
+            { label: 'Port / TLS', value: smtp.port ? `${smtp.port} · ${smtp.secure ? 'TLS' : 'STARTTLS'}` : '—' },
+            { label: 'Pengirim', value: smtp.from || '—' },
+            { label: 'Autentikasi', value: smtp.authenticated ? 'Aktif' : 'Relay tanpa autentikasi' }
+          ] }),
+          smtpMessageSlot
+        )
+      });
       body.replaceChildren(
         el('div', { class: 'grid grid--4' },
           StatCard({ label: 'Pengguna', value: formatNumber(data.users.total), hint: `${data.users.active} aktif · ${data.users.admins} admin`, iconName: 'users', tone: 'brand' }),
@@ -64,7 +115,7 @@ export default async function adminPage(ctx) {
           StatCard({ label: 'Deposit menunggu', value: formatNumber(data.finance.deposits_pending_count), hint: formatRupiah(data.finance.deposits_pending_amount), iconName: 'inbox', tone: 'warning' }),
           StatCard({ label: 'Liabilitas saldo', value: formatRupiah(data.finance.wallet_liability), hint: 'Total saldo pengguna', iconName: 'wallet', tone: 'neutral' })
         ),
-        el('div', { class: 'grid grid--3' },
+        el('div', { class: 'grid grid--2' },
           Card({ title: 'Supplier' },
             KeyValue({
               items: [
@@ -95,7 +146,8 @@ export default async function adminPage(ctx) {
                 { label: 'Payment gateway', value: Badge({ tone: 'neutral', children: data.payment?.enabled ? 'aktif' : 'nonaktif' }) }
               ]
             })
-          )
+          ),
+          smtpCard
         ),
         Card({ title: 'Order terbaru', flush: true },
           Table({

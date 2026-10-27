@@ -69,7 +69,7 @@ export async function createApplication({ env = process.env, logger, supplierOpt
   const notifications = createNotificationService({ db, logger });
 
   const services = {
-    settings, auth, googleOAuth, supplier, catalog, orders, wallet, deposits, payment, notifications,
+    settings, auth, googleOAuth, mailer, supplier, catalog, orders, wallet, deposits, payment, notifications,
     jobsState, rateLimiter, db, config
   };
 

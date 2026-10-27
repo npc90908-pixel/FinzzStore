@@ -140,12 +140,15 @@ Untuk lokal, salin template ringkas lalu isi nilai yang diperlukan:
 
 ```bash
 cp .env.example .env
-npm start                              # Node otomatis membaca .env lokal
+npm start                              # atau: node server.js
 ```
 
-Jangan commit file `.env`. Di Vercel/VPS, masukkan nilai yang sama melalui
-pengelola secret platform (atau gunakan file berizin `0600` di luar repository).
-Variabel yang sudah tersedia di lingkungan proses selalu mengalahkan nilai file.
+Keduanya otomatis membaca `.env` lokal dengan loader bawaan Node; variabel yang
+sudah tersedia di lingkungan proses selalu mengalahkan nilai file. Jangan commit
+file `.env`. Di Vercel/VPS, masukkan nilai melalui pengelola secret platform
+(atau gunakan file berizin `0600` di luar repository). Untuk SMTP, port 587
+memakai STARTTLS dan 465 otomatis memakai TLS; Gmail memerlukan App Password.
+Admin dapat menguji koneksi dari Ringkasan → Email & SMTP tanpa membuka kredensial.
 
 Nilai wajib di produksi: `NODE_ENV=production`, `APP_URL` (https),
 `APP_ENCRYPTION_KEY` (32 byte acak, base64), `DATABASE_URL`, dan `CRON_SECRET`

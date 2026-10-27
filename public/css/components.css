@@ -372,6 +372,10 @@
 .service-card__logo img { width: 23px; height: 23px; object-fit: contain; }
 html[data-theme="dark"] .service-card__logo img[src$="/x.svg"] { filter: invert(1); }
 html[data-theme="light"] .service-card__logo img[src$="/x.svg"] { filter: none; }
+/* TikTok's official glyph uses black, pink and cyan layers; keep the black
+   silhouette legible against both the dark chip and service-card surfaces. */
+.service-card__logo img[src$="/tiktok.svg"],
+.brand-chip__logo[src$="/tiktok.svg"] { padding: 2px; border-radius: 5px; background: #fff; }
 .service-card__name { font-weight: var(--weight-semibold); font-size: var(--text-sm); }
 .service-card__meta { font-size: var(--text-xs); color: var(--text-dim); }
 .service-card__price { font-size: var(--text-md); font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; }
@@ -525,13 +529,13 @@ html[data-theme="light"] .service-card__logo img[src$="/x.svg"] { filter: none; 
   display: flex;
   align-items: center;
   width: max-content;
-  animation: brand-scroll-left 38s linear infinite;
+  animation: brand-scroll-left var(--marquee-duration, 38s) linear infinite;
   will-change: transform;
 }
 
 .brand-marquee__track--right {
   animation-name: brand-scroll-right;
-  animation-duration: 46s;
+  animation-duration: var(--marquee-duration, 46s);
 }
 
 /* Equal-width groups make the -50% reset genuinely seamless, including the gap. */
@@ -602,7 +606,6 @@ html[data-theme="light"] .brand-chip__logo[src$="/x.svg"] { filter: none; }
   color: var(--text);
 }
 
-.brand-marquee:hover .brand-marquee__track,
 .brand-marquee:hover .brand-chip {
   animation-play-state: paused;
 }
@@ -615,6 +618,7 @@ html[data-theme="light"] .brand-chip__logo[src$="/x.svg"] { filter: none; }
     translate: none;
     will-change: auto;
   }
+  .brand-marquee__group[aria-hidden="true"] { display: none; }
   .brand-marquee__row {
     overflow-x: auto;
     scrollbar-width: none;

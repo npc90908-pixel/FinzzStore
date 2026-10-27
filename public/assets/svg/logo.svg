@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="64" height="64" role="img" aria-label="FINZZ Store">
-  <rect x="1.5" y="1.5" width="45" height="45" rx="15" fill="#101522" stroke="#3b465e" stroke-opacity=".65" stroke-width="1.2"/>
-  <rect x="5.5" y="5.5" width="37" height="37" rx="12" fill="#151d30"/>
-  <path d="M16 34V18a5 5 0 0 1 5-5h12.5" fill="none" stroke="#7c8cff" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M16.4 23.5h12.2" fill="none" stroke="#2ee6b6" stroke-width="4.6" stroke-linecap="round"/>
-  <circle cx="33.7" cy="33.1" r="2.8" fill="#2ee6b6"/>
+  <rect x="1.5" y="1.5" width="45" height="45" rx="15" fill="#101522" stroke="#3b465e" stroke-opacity=".68" stroke-width="1.2"/>
+  <rect x="5.5" y="5.5" width="37" height="37" rx="12" fill="#131a2a"/>
+  <path d="M14.5 34V18.5a4.5 4.5 0 0 1 4.5-4.5h14" fill="none" stroke="#7c8cff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M15 23.5h11" fill="none" stroke="#2ee6b6" stroke-width="4.2" stroke-linecap="round"/>
+  <path d="M23.5 25.5h10l-10 8.5h10" fill="none" stroke="#2ee6b6" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

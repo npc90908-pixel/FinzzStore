@@ -65,7 +65,7 @@ Rekomendasi kuat (bukan syarat boot, tapi tanpa ini fitur redup):
 
 | Variabel | Akibat kalau kosong |
 |---|---|
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` (+ `SMTP_USER`, `SMTP_PASS`) | OTP verifikasi & reset password **tidak terkirim**. Registrasi tetap jujur melaporkan `emailSent:false` — tidak memalsukan "email terkirim". Gunakan `SMTP_SECURE=true` untuk port 465; port 587 memakai STARTTLS. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | OTP verifikasi & reset password **tidak terkirim**. Port 587 memakai STARTTLS; port 465 otomatis memakai TLS. `SMTP_USER` dan `SMTP_PASS` harus berpasangan; jika `SMTP_FROM` kosong, alamat `SMTP_USER` dipakai sebagai pengirim. Untuk Gmail gunakan App Password (bukan password akun); spasi format App Password akan dinormalisasi. Diagnostik aman tersedia di Admin → Ringkasan → Email & SMTP → **Uji koneksi**. |
 | `TELEKOS_API_KEY` | Tanpa key supplier otomatis `off`, katalog kosong, dan pembelian tidak tersedia. Isi key untuk memakai data nomor nyata. |
 | `TELEKOS_WEBHOOK_SECRET` | Opsional bila hanya memakai cron polling. Wajib jika webhook dipakai; tanpa secret, endpoint webhook menolak event dengan 503. |
 

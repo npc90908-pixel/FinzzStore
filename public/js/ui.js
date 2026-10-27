@@ -19,7 +19,12 @@ export function el(tag, props = {}, ...children) {
     if (key === 'class' || key === 'className') node.className = String(value);
     else if (key === 'text') node.textContent = String(value);
     else if (key === 'html') node.innerHTML = String(value); // developer-authored only
-    else if (key === 'style' && typeof value === 'object') Object.assign(node.style, value);
+    else if (key === 'style' && typeof value === 'object') {
+      for (const [property, styleValue] of Object.entries(value)) {
+        if (property.startsWith('--')) node.style.setProperty(property, String(styleValue));
+        else node.style[property] = styleValue;
+      }
+    }
     else if (key === 'dataset' && typeof value === 'object') Object.assign(node.dataset, value);
     else if (key === 'attrs' && typeof value === 'object') {
       for (const [attr, attrValue] of Object.entries(value)) {
@@ -43,6 +48,13 @@ function appendChildren(node, children) {
     if (child === null || child === undefined || child === false) continue;
     node.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
   }
+}
+
+/** Replace a node's children using the same null-safe contract as `el()`. */
+export function setChildren(node, ...children) {
+  node.replaceChildren();
+  appendChildren(node, children);
+  return node;
 }
 
 export const frag = (...children) => {

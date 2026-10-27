@@ -7,6 +7,16 @@ import { createServer } from 'node:http';
 import { ConfigError } from './src/config.js';
 import { createLogger } from './src/logging.js';
 import { createApplication } from './src/bootstrap.js';
+import { loadOptionalEnvFile } from './src/env.js';
+
+let envFileError = null;
+try {
+  // `npm start` loads .env itself; this also covers `node server.js` and PM2.
+  // Existing process/deployment variables take precedence over file values.
+  loadOptionalEnvFile();
+} catch (error) {
+  envFileError = error;
+}
 
 const ON_VERCEL = Boolean(process.env.VERCEL);
 
@@ -34,6 +44,12 @@ function getApp() {
 
 /** Vercel entry: one request = one call. Must be the default export. */
 export default async function vercelHandler(req, res) {
+  if (envFileError) {
+    createLogger().error('invalid local environment file', { code: envFileError.code || 'ENV_FILE_ERROR' });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: 'ENV_FILE_INVALID', message: 'Environment file could not be loaded.' } }));
+    return;
+  }
   try {
     const { handler } = await getApp();
     await handler(req, res);
@@ -48,6 +64,11 @@ export default async function vercelHandler(req, res) {
 
 async function main() {
   const logger = createLogger({ level: process.env.LOG_LEVEL || 'info' });
+  if (envFileError) {
+    logger.error('invalid local environment file', { code: envFileError.code || 'ENV_FILE_ERROR' });
+    process.exitCode = 78; // EX_CONFIG
+    return;
+  }
 
   let app;
   try {
