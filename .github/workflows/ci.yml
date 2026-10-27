@@ -35,6 +35,10 @@ jobs:
 
     env:
       DATABASE_URL: postgres://finzz:finzz_ci_pw@127.0.0.1:5432/finzz_test
+      # Harness tests/sql.test.js membaca TEST_DATABASE_URL (lihat
+      # tests/support/db-harness.mjs), bukan DATABASE_URL. Tanpa variabel ini
+      # ia jatuh ke password lokal finzz_local_pw dan gagal autentikasi.
+      TEST_DATABASE_URL: postgres://finzz:finzz_ci_pw@127.0.0.1:5432/finzz_test
       DATABASE_SSL: disable
 
     steps:
