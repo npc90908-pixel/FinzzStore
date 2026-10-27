@@ -258,10 +258,11 @@ export function createApp({ config, logger, db, auth, services, router }) {
       res.setHeader(header, value);
     }
 
-    // Pages whose URL carries a one-time secret (reset link, verification code)
-    // must not leak it through the Referer header of any request they trigger.
-    // `no-referrer` is stricter than the site-wide default on purpose.
-    if (/^\/(reset-password|verify-email)(\/|$)/.test(String(req.url || '').split('?')[0])) {
+    // Pages/callbacks whose URL carries a one-time secret (reset link,
+    // verification code, OAuth authorization code) must not leak it through
+    // the Referer header of any request they trigger. `no-referrer` is stricter
+    // than the site-wide default on purpose.
+    if (/^\/(reset-password|verify-email|api\/auth\/google\/callback)(\/|$)/.test(String(req.url || '').split('?')[0])) {
       res.setHeader('Referrer-Policy', 'no-referrer');
     }
 

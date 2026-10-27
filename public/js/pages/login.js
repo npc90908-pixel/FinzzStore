@@ -2,7 +2,7 @@
 // LOGIN PAGE
 // ============================================================================
 import { el, Input, Button, Alert, runWithLoading, clearFormErrors, fieldError, toast } from '../ui.js';
-import { icon } from '../icons.js';
+import { icon, BRAND_MARK_SVG } from '../icons.js';
 import { ApiError } from '../api.js';
 import { mountTurnstile, turnstileConfig } from '../turnstile.js';
 
@@ -26,6 +26,16 @@ export default async function login(ctx) {
     captcha = await mountTurnstile(captchaBox, { siteKey: tsConfig.siteKey, action: 'login' });
   }
 
+  const googleOAuthEnabled = Boolean(publicSettings?.app?.oauth?.google);
+  const oauthErrors = {
+    denied: 'Login Google dibatalkan. Anda dapat mencoba lagi atau masuk dengan email.',
+    state: 'Sesi login Google kedaluwarsa. Silakan mulai lagi.',
+    unverified: 'Email Google belum terverifikasi. Gunakan email dan password untuk masuk.',
+    failed: 'Login Google gagal. Coba lagi atau masuk dengan email.',
+    unavailable: 'Login Google sedang tidak tersedia.'
+  };
+  const oauthMessage = oauthErrors[query.get('oauth') || ''];
+
   form.append(
     el('div', { class: 'auth-card__head' },
       el('span', { class: 'feature-tile feature-tile--lg auth-card__icon' }, icon('shield', { size: 22 })),
@@ -35,12 +45,31 @@ export default async function login(ctx) {
       el('p', { class: 'auth-card__lead', text: 'Gunakan email dan password yang terdaftar untuk mengakses saldo, order, dan OTP.' })
     ),
     errorBox,
-    demoAccounts.length ? demoHint(demoAccounts, (account) => {
+    ...(oauthMessage ? [Alert({ tone: 'warning', title: 'Login Google', children: oauthMessage })] : []),
+    ...(googleOAuthEnabled ? [
+      el('a', {
+        class: 'btn btn--outline btn--lg btn--block oauth-login__button',
+        attrs: {
+          href: `/api/auth/google?next=${encodeURIComponent(next || '/dashboard')}`,
+          'data-native-navigation': '',
+          'aria-label': 'Lanjutkan dengan Google'
+        }
+      },
+        el('img', { attrs: { src: '/assets/brands/google.svg', alt: '', width: '20', height: '20', decoding: 'async' } }),
+        el('span', { text: 'Lanjutkan dengan Google' })
+      ),
+      el('div', { class: 'oauth-login__divider', attrs: { 'aria-hidden': 'true' } },
+        el('span'), el('span', { text: 'atau gunakan email' }), el('span')
+      )
+    ] : []),
+    // Native Element.append() would stringify a bare `null` into visible text,
+    // so the conditional node is spread in instead of passed as a null slot.
+    ...(demoAccounts.length ? [demoHint(demoAccounts, (account) => {
       email.querySelector('input').value = account.email;
       password.querySelector('input').value = account.password;
       submit.focus?.();
-      toast(`Akun ${account.label.toLowerCase()} terisi. Tekan Masuk.`, { variant: 'info' });
-    }) : null,
+      toast({ type: 'info', title: 'Akun demo terisi', message: `Akun ${account.label.toLowerCase()} terisi. Tekan Masuk.` });
+    })] : []),
     email,
     password,
     el('div', { class: 'row row--between' },
@@ -113,8 +142,9 @@ export default async function login(ctx) {
 
   const side = el('aside', { class: 'auth-side' },
     el('div', { class: 'brand' },
-      el('span', { class: 'brand__mark', html: '<svg viewBox="0 0 48 48" width="34" height="34"><defs><linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#2ee6b6"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#lg1)"/><path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#06070d"/></svg>' }),
-      el('span', { class: 'brand__name', text: 'FINZZ' })
+      el('span', { class: 'brand__mark', html: BRAND_MARK_SVG }),
+      el('span', { class: 'brand__name', text: 'FINZZ' }),
+      el('span', { class: 'brand__badge', text: 'STORE' })
     ),
     el('p', { class: 'auth-side__quote', text: '“Satu akun untuk nomor virtual, saldo, dan seluruh riwayat OTP Anda.”' }),
     el('ul', { class: 'auth-list' },

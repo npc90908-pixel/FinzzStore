@@ -51,18 +51,23 @@ dengan database yang salah.
 | Variabel | Bentuk | Kalau kosong/salah |
 |---|---|---|
 | `DATABASE_URL` | `postgres://user:pass@host:5432/db` (pakai host pooler port 6543 untuk serverless) | **boot gagal**: `DATABASE_URL is required in production` |
-| `DATABASE_SSL` | **`no-verify`** · `require` · `disable` | Pooler Supabase memakai sertifikat yang tidak terverifikasi (`SELF_SIGNED_CERT_IN_CHAIN`), jadi `require` **gagal konek**. `no-verify` tetap terenkripsi, hanya tanpa verifikasi rantai. Ini kompromi sadar, bukan default yang aman. |
 | `APP_ENCRYPTION_KEY` | 32 byte acak, base64 | **boot gagal** |
 | `APP_URL` | `https://…` | **boot gagal** kalau bukan https |
 | `CRON_SECRET` | ≥ 16 karakter acak | **boot gagal**. Dipakai cron-job.org & Vercel Cron (`Authorization: Bearer …`). |
-| `TELEKOS_API_KEY` | API key TeleKos yang **valid** | supplier `off`: katalog kosong, tidak ada pembelian |
-| `TELEKOS_WEBHOOK_SECRET` | secret webhook TeleKos | webhook selalu `401 INVALID_SIGNATURE` |
+
+Pengaturan koneksi yang biasanya dibiarkan pada default:
+
+| Variabel | Bentuk / default | Catatan |
+|---|---|---|
+| `DATABASE_SSL` | `require` otomatis di produksi; opsional `no-verify` / `disable` | TLS tetap aktif dengan `no-verify`, tetapi validasi sertifikat dimatikan. Pakai hanya jika host Postgres mengharuskannya; `disable` hanya untuk lokal. |
 
 Rekomendasi kuat (bukan syarat boot, tapi tanpa ini fitur redup):
 
 | Variabel | Akibat kalau kosong |
 |---|---|
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` (+ `SMTP_USER`, `SMTP_PASS`) | OTP verifikasi & reset password **tidak terkirim**. Registrasi tetap jujur melaporkan `emailSent:false` — tidak memalsukan "email terkirim". |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` (+ `SMTP_USER`, `SMTP_PASS`) | OTP verifikasi & reset password **tidak terkirim**. Registrasi tetap jujur melaporkan `emailSent:false` — tidak memalsukan "email terkirim". Gunakan `SMTP_SECURE=true` untuk port 465; port 587 memakai STARTTLS. |
+| `TELEKOS_API_KEY` | Tanpa key supplier otomatis `off`, katalog kosong, dan pembelian tidak tersedia. Isi key untuk memakai data nomor nyata. |
+| `TELEKOS_WEBHOOK_SECRET` | Opsional bila hanya memakai cron polling. Wajib jika webhook dipakai; tanpa secret, endpoint webhook menolak event dengan 503. |
 
 ---
 
@@ -70,8 +75,8 @@ Rekomendasi kuat (bukan syarat boot, tapi tanpa ini fitur redup):
 
 | Variabel | Efek |
 |---|---|
-| `TURNSTILE_ENABLED=true` + `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` | Captcha Cloudflare di register/login/lupa-password. Fail-closed: token tidak valid = ditolak 400. Kalau `true` tanpa secret → boot gagal. |
-| `GOOGLE_OAUTH_ENABLED=true` + `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GOOGLE_REDIRECT_URI` | Tombol "Masuk dengan Google". Tombol disembunyikan kalau tidak lengkap. |
+| `TURNSTILE_SITE_KEY` + `TURNSTILE_SECRET_KEY` | Isi keduanya untuk mengaktifkan captcha Cloudflare otomatis di daftar/masuk/lupa-password. Tanpa key, widget tersembunyi. Konfigurasi setengah lengkap atau `TURNSTILE_ENABLED=true` tanpa kedua key ditolak saat boot; token yang tidak valid ditolak dengan 400. `TURNSTILE_ENABLED=false` dapat dipakai sebagai kill switch. |
+| `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` | Isi keduanya untuk menampilkan tombol "Lanjutkan dengan Google". Callback diturunkan otomatis dari `${APP_URL}/api/auth/google/callback`; jika mengisi override opsional `GOOGLE_REDIRECT_URI`, nilainya harus persis sama. Konfigurasi setengah lengkap ditolak saat boot. `GOOGLE_OAUTH_ENABLED=false` adalah kill switch opsional. Callback memakai state + PKCE verifier di cookie HttpOnly, dan hanya menerima email Google yang terverifikasi. |
 | `PAYMENT_PROVIDER`, `PAYMENT_MODE`, `PAYMENT_SECRET` | Top-up otomatis. Biarkan kosong/`disabled`: UI berkata "pembayaran otomatis belum aktif" dan deposit manual tetap jalan. |
 | `DATABASE_POOL_MAX`, `DATABASE_CONNECTION_TIMEOUT`, `DATABASE_IDLE_TIMEOUT`, `DATABASE_STATEMENT_TIMEOUT` | Tuning pool (default 10 / 10 dtk / 30 dtk / 15 dtk). |
 | `LOG_LEVEL` | Default `info` di produksi. |

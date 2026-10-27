@@ -21,13 +21,13 @@ const HERO_ART = `
     </linearGradient>
   </defs>
   <rect x="30" y="24" width="360" height="330" rx="26" fill="url(#heroCard)" stroke="rgba(148,163,198,0.22)"/>
-  <rect x="128" y="52" width="164" height="286" rx="28" fill="#0b0f18" stroke="rgba(148,163,198,0.28)"/>
+  <rect x="128" y="52" width="164" height="286" rx="28" fill="#0d1220" stroke="rgba(148,163,198,0.28)"/>
   <rect x="140" y="64" width="140" height="262" rx="20" fill="#111726"/>
   <rect x="176" y="72" width="68" height="7" rx="3.5" fill="rgba(148,163,198,0.35)"/>
-  <rect x="152" y="98" width="116" height="34" rx="10" fill="rgba(109,139,255,0.18)" stroke="rgba(109,139,255,0.4)"/>
+  <rect x="152" y="98" width="116" height="34" rx="10" fill="rgba(124,140,255,0.18)" stroke="rgba(124,140,255,0.4)"/>
   <text x="210" y="120" text-anchor="middle" font-family="ui-monospace, monospace" font-size="13" fill="#a9baff">+62 812 •••• 4471</text>
   <rect x="152" y="146" width="52" height="8" rx="4" fill="rgba(148,163,198,0.24)"/>
-  <rect x="152" y="164" width="116" height="60" rx="12" fill="rgba(34,211,166,0.12)" stroke="rgba(34,211,166,0.38)"/>
+  <rect x="152" y="164" width="116" height="60" rx="12" fill="rgba(46,230,182,0.12)" stroke="rgba(46,230,182,0.38)"/>
   <text x="210" y="192" text-anchor="middle" font-family="ui-monospace, monospace" font-size="20" letter-spacing="6" fill="#6ff0cd">481 902</text>
   <text x="210" y="210" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" fill="#6ff0cd" opacity="0.75">WhatsApp · OTP diterima</text>
   <rect x="152" y="238" width="116" height="8" rx="4" fill="rgba(148,163,198,0.18)"/>
@@ -36,12 +36,12 @@ const HERO_ART = `
   <text x="210" y="305" text-anchor="middle" font-family="Inter, sans-serif" font-size="10" font-weight="600" fill="#07120f">Selesai</text>
   <g opacity="0.95">
     <rect x="252" y="150" width="128" height="52" rx="12" fill="#0f1420" stroke="rgba(148,163,198,0.28)"/>
-    <circle cx="274" cy="170" r="9" fill="rgba(34,211,166,0.2)" stroke="rgba(34,211,166,0.5)"/>
+    <circle cx="274" cy="170" r="9" fill="rgba(46,230,182,0.2)" stroke="rgba(46,230,182,0.5)"/>
     <path d="m270 170 3 3 5-6" stroke="#2ee6b6" stroke-width="1.8" fill="none" stroke-linecap="round"/>
     <rect x="290" y="163" width="70" height="6" rx="3" fill="rgba(148,163,198,0.35)"/>
     <rect x="290" y="176" width="48" height="6" rx="3" fill="rgba(148,163,198,0.2)"/>
     <rect x="252" y="212" width="128" height="52" rx="12" fill="#0f1420" stroke="rgba(148,163,198,0.28)"/>
-    <circle cx="274" cy="232" r="9" fill="rgba(109,139,255,0.2)" stroke="rgba(109,139,255,0.5)"/>
+    <circle cx="274" cy="232" r="9" fill="rgba(124,140,255,0.2)" stroke="rgba(124,140,255,0.5)"/>
     <path d="M270 232h8M274 228v8" stroke="#7c8cff" stroke-width="1.8" stroke-linecap="round"/>
     <rect x="290" y="225" width="62" height="6" rx="3" fill="rgba(148,163,198,0.35)"/>
     <rect x="290" y="238" width="40" height="6" rx="3" fill="rgba(148,163,198,0.2)"/>
@@ -154,7 +154,7 @@ export default async function landing(ctx) {
   // shift, no invented logos).
   const marqueeSection = el('section', {
     class: 'brand-marquee',
-    attrs: { 'aria-hidden': 'true', hidden: '' }
+    attrs: { 'aria-label': 'Merek yang tersedia di katalog layanan', hidden: '' }
   });
   main.appendChild(marqueeSection);
 
@@ -166,17 +166,26 @@ export default async function landing(ctx) {
     marqueeSection.replaceChildren(
       ...rows.map((row, index) => {
         const track = el('div', { class: `brand-marquee__track brand-marquee__track--${index % 2 === 0 ? 'left' : 'right'}` });
-        // The second copy is what makes the loop seamless. It is presentation
-        // only — the catalogue itself has exactly one row per service.
-        const items = [...row, ...row];
-        track.replaceChildren(
-          ...items.map((brand) => el('span', { class: 'brand-chip', attrs: { title: brand.label } },
-            brand.src
-              ? el('img', { class: 'brand-chip__logo', attrs: { src: brand.src, alt: '', width: '22', height: '22', loading: 'lazy', decoding: 'async' } })
-              : el('span', { class: 'brand-chip__wordmark', text: brand.label }),
-            el('span', { class: 'brand-chip__label', text: brand.label })
-          ))
-        );
+        // A second, assistive-tech-hidden visual copy creates the seamless loop.
+        // `row` itself is deduplicated by app id, so no extra service/inventory
+        // is introduced by the animation.
+        const group = (hiddenCopy) => el('div', {
+          class: 'brand-marquee__group',
+          attrs: hiddenCopy ? { 'aria-hidden': 'true' } : {}
+        }, row.map((brand, itemIndex) => {
+          const content = brand.src
+            ? [
+                el('img', { class: 'brand-chip__logo', attrs: { src: brand.src, alt: '', width: '22', height: '22', loading: 'lazy', decoding: 'async' } }),
+                el('span', { class: 'brand-chip__label', text: brand.label })
+              ]
+            : [el('span', { class: 'brand-chip__wordmark', text: brand.label })];
+          return el('span', {
+            class: 'brand-chip',
+            attrs: { title: brand.label },
+            style: { '--float-delay': `${(itemIndex % 5) * -0.55}s` }
+          }, content);
+        }));
+        track.replaceChildren(group(false), group(true));
         return el('div', { class: 'brand-marquee__row' }, track);
       })
     );
@@ -277,7 +286,7 @@ export default async function landing(ctx) {
     ['Apa yang terjadi jika OTP tidak kunjung datang?', 'Order berakhir sesuai batas waktu supplier. Jika tidak ada OTP yang diterima, saldo dikembalikan otomatis dan dicatat pada riwayat transaksi.'],
     ['Bisakah saya membatalkan order?', 'Bisa, selama supplier mengizinkan pembatalan dan belum ada OTP. Jika syarat belum terpenuhi, tombol batal nonaktif dan status ditampilkan apa adanya.'],
     ['Apakah nomor ini bisa dipakai berkali-kali?', 'Satu nomor untuk satu order dan satu verifikasi. Nomor dapat dipakai ulang oleh supplier lain setelah order selesai, jadi hanya gunakan untuk verifikasi yang Anda butuhkan saat itu.'],
-    ['Bagaimana perlindungan data saya?', 'Password dikelola oleh penyedia autentikasi, bukan disimpan di aplikasi ini. OTP hanya dapat dibaca oleh pemilik order yang sah melalui sesi server.']
+    ['Bagaimana perlindungan data saya?', 'Password disimpan sebagai hash Argon2id dan tidak pernah dikirim kembali ke browser. Sesi memakai cookie HttpOnly; OTP hanya dapat dibaca pemilik order yang sah.']
   ];
   main.appendChild(
     el('section', { class: 'section section--alt', attrs: { id: 'faq' } },
@@ -362,10 +371,15 @@ export default async function landing(ctx) {
     // app cards
     body.appendChild(
       el('div', { class: 'grid grid--4' },
-        catalog.apps.slice(0, 8).map((app) =>
-          el('div', { class: 'service-card' },
+        catalog.apps.slice(0, 8).map((app) => {
+          const brand = marqueeBrands([app])[0];
+          return el('div', { class: 'service-card' },
             el('div', { class: 'service-card__head' },
-              el('span', { class: 'service-card__logo' }, icon(APPS_ICON[app.name] || 'smartphone', { size: 18 })),
+              el('span', { class: 'service-card__logo' },
+                brand?.src
+                  ? el('img', { attrs: { src: brand.src, alt: '', width: '23', height: '23', loading: 'lazy', decoding: 'async' } })
+                  : icon(APPS_ICON[app.name] || 'smartphone', { size: 18 })
+              ),
               el('div', {},
                 el('div', { class: 'service-card__name', text: app.name }),
                 el('div', { class: 'service-card__meta', text: `${formatNumber(app.countryCount)} negara` })
@@ -376,8 +390,8 @@ export default async function landing(ctx) {
               el('span', { class: 'badge badge--success' }, el('span', { text: `${formatNumber(app.totalStock)} stok` }))
             ),
             el('span', { class: 'service-card__meta', text: 'Harga mulai dari' })
-          )
-        )
+          );
+        })
       )
     );
 

@@ -113,20 +113,22 @@ export function sendHtml(res, status, html, { nonce, config, headers = {} } = {}
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': body.length,
     'Cache-Control': 'no-store',
-    ...(nonce ? { 'Content-Security-Policy': buildCsp(nonce) } : {}),
+    ...(nonce ? { 'Content-Security-Policy': buildCsp(nonce, config) } : {}),
     ...headers
   });
   res.end(body);
 }
 
-export function buildCsp(nonce) {
+export function buildCsp(nonce, config = {}) {
+  const turnstileSources = config?.turnstile?.enabled ? ' https://challenges.cloudflare.com' : '';
   return [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}'`,
+    `script-src 'self' 'nonce-${nonce}'${turnstileSources}`,
     "style-src 'self'",
     "img-src 'self' data:",
     "font-src 'self'",
-    "connect-src 'self'",
+    `connect-src 'self'${turnstileSources}`,
+    ...(config?.turnstile?.enabled ? ["frame-src 'self' https://challenges.cloudflare.com"] : []),
     "form-action 'self'",
     "frame-ancestors 'none'",
     "base-uri 'none'",

@@ -74,7 +74,12 @@ export async function mountTurnstile(container, { siteKey, action = 'default', t
 
 /** Convenience: read the flag out of the cached public settings. */
 export function turnstileConfig(publicSettings) {
-  const turnstile = publicSettings?.config?.turnstile || publicSettings?.turnstile || {};
+  // /api/public/config nests the public view under `app`; the other two paths
+  // keep this tolerant of older fixtures and the boot-state config object.
+  const turnstile = publicSettings?.app?.turnstile
+    || publicSettings?.config?.turnstile
+    || publicSettings?.turnstile
+    || {};
   return {
     enabled: Boolean(turnstile.enabled),
     siteKey: turnstile.siteKey || ''

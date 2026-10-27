@@ -63,6 +63,7 @@ single-shot refunds, idempotency, transition matrix). It refuses to run when
 ```bash
 export PATH=/path/to/node24/bin:$PATH          # Node 24.x
 npm ci
+cp .env.example .env                           # opsional; simpan rahasia lokal di sini
 SUPPLIER_MODE=mock DEMO_MODE=true npm start    # http://localhost:3000
 ```
 
@@ -86,8 +87,8 @@ Useful scripts:
 
 | Script | Purpose |
 | --- | --- |
-| `npm start` | run the server |
-| `npm run dev` | `node --watch server.js` |
+| `npm start` | run the server; automatically loads an optional local `.env` |
+| `npm run dev` | watch mode; automatically loads an optional local `.env` |
 | `npm test` | unit + API + UI tests (`node:test`) |
 | `npm run test:sql` | schema / RLS / RPC suite against local PostgreSQL |
 | `npm run test:all` | check + tests + SQL suite |
@@ -135,27 +136,26 @@ DATABASE_URL=postgres://... npm run db:seed-dev -- --promote owner@example.com
 
 ### 3.3 Environment
 
-Copy `.env.example`, fill it, and keep it outside the repository:
+Untuk lokal, salin template ringkas lalu isi nilai yang diperlukan:
 
 ```bash
-sudo install -d -m 700 /etc/finzz
-sudo install -m 600 .env.example /etc/finzz/finzz.env   # then edit
+cp .env.example .env
+npm start                              # Node otomatis membaca .env lokal
 ```
 
-Minimum production values: `NODE_ENV=production`, `APP_URL` (https),
-`APP_ENCRYPTION_KEY` (32 random bytes, base64), `DATABASE_URL`, the SMTP settings,
-`SUPPLIER_MODE=live` + `TELEKOS_API_KEY` + `TELEKOS_WEBHOOK_SECRET`.
+Jangan commit file `.env`. Di Vercel/VPS, masukkan nilai yang sama melalui
+pengelola secret platform (atau gunakan file berizin `0600` di luar repository).
+Variabel yang sudah tersedia di lingkungan proses selalu mengalahkan nilai file.
 
-Key variables (full list in `.env.example`):
+Nilai wajib di produksi: `NODE_ENV=production`, `APP_URL` (https),
+`APP_ENCRYPTION_KEY` (32 byte acak, base64), `DATABASE_URL`, dan `CRON_SECRET`
+(minimal 16 karakter). SMTP sangat disarankan untuk OTP/reset password;
+`TELEKOS_API_KEY` otomatis mengaktifkan katalog supplier. Turnstile dan Google
+OAuth bersifat opsional: fitur hidup hanya setelah seluruh pasangan kredensialnya
+terisi, dan UI menyembunyikan integrasi yang belum dikonfigurasi.
 
-| Variable | Notes |
-| --- | --- |
-| `APP_ENCRYPTION_KEY` | session/token encryption key, ≥32 bytes |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | server-side only |
-| `SUPPLIER_MODE` | `live`, `mock`, `off` (`mock` refused in production) |
-| `TELEKOS_API_KEY` / `TELEKOS_WEBHOOK_SECRET` | webhook signature is HMAC over `timestamp.raw_body` |
-| `ORDER_POLL_INTERVAL_MS` | server-side supplier polling, default 15 000 |
-| `UPLOAD_DIR` | private deposit-proof directory (default `./storage`) |
+Lihat `.env.example` untuk variabel penting dan `ENV-PRODUKSI.md` untuk seluruh
+default, pengaturan deployment, serta troubleshooting.
 
 ### 3.4 Process manager and tunnel
 

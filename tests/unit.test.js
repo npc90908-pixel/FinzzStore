@@ -13,7 +13,8 @@ import {
   parseRupiah, fromDbAmount, applyBps, composePrice, formatRupiah, toDbAmount, MoneyError, MAX_AMOUNT,
   resolvePrice, normalisePricingPolicy, describePricing, ROUNDING_MODES
 } from '../src/money.js';
-import { escapeHtml, safeJsonForHtml, sha256, assertRequestOrigin, originAllowed, requestOriginAllowed } from '../src/security.js';
+import { escapeHtml, safeJsonForHtml, sha256, assertRequestOrigin, originAllowed, requestOriginAllowed, securityHeaders } from '../src/security.js';
+import { buildCsp } from '../src/http.js';
 import { loadConfig, publicConfigView } from '../src/config.js';
 import { redact } from '../src/logging.js';
 import * as v from '../src/validation.js';
@@ -22,6 +23,8 @@ import { createMockSupplier } from '../src/supplier-mock.js';
 import { PAGES } from '../src/pages.js';
 import { renderDocument } from '../src/render.js';
 import { createLogger } from '../src/logging.js';
+import { marqueeBrands, splitRows } from '../public/js/brands.js';
+import { createGoogleOAuth } from '../src/auth-google.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -97,6 +100,23 @@ test('security: secrets are redacted from log metadata', () => {
   assert.notEqual(output.authorization, 'Bearer abc.def');
   assert.notEqual(output.nested.token, 'abc');
   assert.equal(output.nested.ok, 1);
+});
+
+test('security: CSP permits Turnstile only when the feature is configured', () => {
+  const disabled = loadConfig({ NODE_ENV: 'test' });
+  const enabled = loadConfig({
+    NODE_ENV: 'test',
+    APP_URL: 'https://finzz.test',
+    TURNSTILE_SITE_KEY: 'public-site-key',
+    TURNSTILE_SECRET_KEY: 'private-secret'
+  });
+  const disabledPolicy = buildCsp('nonce', disabled);
+  const enabledPolicy = buildCsp('nonce', enabled);
+  assert.ok(!disabledPolicy.includes('challenges.cloudflare.com'));
+  assert.match(enabledPolicy, /script-src[^;]*challenges\.cloudflare\.com/);
+  assert.match(enabledPolicy, /connect-src[^;]*challenges\.cloudflare\.com/);
+  assert.match(enabledPolicy, /frame-src 'self' https:\/\/challenges\.cloudflare\.com/);
+  assert.match(securityHeaders('nonce', enabled)['Content-Security-Policy'], /frame-src 'self'/);
 });
 
 test('security: token hashing is stable and one-way', () => {
@@ -219,7 +239,12 @@ test('renderer: server HTML carries a CSP nonce and a JSON boot state', () => {
     page: 'landing',
     meta: { title: 'FINZZ Store' },
     nonce: 'abc123nonce',
-    state: { user: { id: 'u1', email: 'a@b.c' }, config: { appName: 'FINZZ' }, csrfToken: 'csrf-token' }
+    state: {
+      path: '/reset-password?token=secret-preview-token',
+      user: { id: 'u1', email: 'a@b.c' },
+      config: { appName: 'FINZZ', appUrl: 'https://finzz.test' },
+      csrfToken: 'csrf-token'
+    }
   });
   assert.match(html, /nonce="abc123nonce"/);
   assert.match(html, /id="finzz-state"/);
@@ -228,9 +253,28 @@ test('renderer: server HTML carries a CSP nonce and a JSON boot state', () => {
   assert.ok(!/src="https?:\/\//.test(html), 'the shell must not load external scripts');
   assert.ok(!/@import\s+url\(/.test(html), 'the shell must not load external styles');
   assert.ok(html.includes('/js/main.js'));
+  const canonical = html.match(/<link rel="canonical" href="([^"]+)">/)?.[1];
+  assert.equal(canonical, 'https://finzz.test/reset-password', 'query secrets never enter canonical/share URLs');
+  assert.match(html, /property="og:image" content="https:\/\/finzz\.test\/assets\/og-finzz\.png"/);
+  assert.match(html, /name="twitter:card" content="summary_large_image"/);
 });
 
 // ----------------------------------------------------------- static gates ---
+test('social share and touch-icon assets are valid-sized local PNGs', async () => {
+  for (const [file, width, height] of [
+    ['public/assets/og-finzz.png', 1200, 630],
+    ['public/assets/svg/apple-touch-icon.png', 180, 180],
+    ['public/assets/svg/favicon.png', 32, 32]
+  ]) {
+    const png = await readFile(path.join(ROOT, file));
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', `${file} has the PNG signature`);
+    assert.equal(png.readUInt32BE(16), width, `${file} width`);
+    assert.equal(png.readUInt32BE(20), height, `${file} height`);
+  }
+  const svgIcon = await readFile(path.join(ROOT, 'public/assets/svg/favicon.svg'), 'utf8');
+  assert.match(svgIcon, /viewBox="0 0 48 48"/);
+});
+
 test('repository: no physical .html files are shipped', async () => {
   const files = await walk(ROOT, (file) => file.endsWith('.html'));
   assert.deepEqual(files, [], `unexpected HTML files: ${files.join(', ')}`);
@@ -260,6 +304,9 @@ test('frontend: no innerHTML with dynamic data and no secrets in public assets',
     const source = await readFile(file, 'utf8');
     for (const secret of ['SUPABASE_SERVICE_ROLE_KEY', 'TELEKOS_API_KEY', 'APP_ENCRYPTION_KEY', 'service_role']) {
       assert.ok(!source.includes(secret), `${path.relative(ROOT, file)} exposes ${secret}`);
+    }
+    for (const oldColor of ['#6d8bff', '#22d3a6', '#0b0d12', 'rgba(109,139,255', 'rgba(34,211,166']) {
+      assert.ok(!source.toLowerCase().includes(oldColor.toLowerCase()), `${path.relative(ROOT, file)} reintroduces retired brand palette ${oldColor}`);
     }
   }
 });
@@ -328,6 +375,106 @@ test('config: demo credentials exist only for a non-production demo', () => {
   assert.equal(prod.demo.seed, false);
 });
 
+test('config: optional integrations enable from complete credentials and never expose secrets', () => {
+  const plain = loadConfig(PROD_ENV);
+  assert.equal(plain.turnstile.enabled, false);
+  assert.equal(plain.oauth.available, false);
+  assert.deepEqual(publicConfigView(plain).oauth, { google: false });
+
+  const configured = loadConfig({
+    ...PROD_ENV,
+    TURNSTILE_ENABLED: undefined,
+    TURNSTILE_SITE_KEY: 'public-site-key',
+    TURNSTILE_SECRET_KEY: 'private-turnstile-secret',
+    GOOGLE_CLIENT_ID: 'client-id',
+    GOOGLE_CLIENT_SECRET: 'private-google-secret'
+  });
+  assert.equal(configured.turnstile.enabled, true);
+  assert.equal(configured.oauth.available, true);
+  assert.equal(configured.oauth.redirectUri, 'https://finzz.test/api/auth/google/callback');
+  assert.deepEqual(publicConfigView(configured).turnstile, { enabled: true, siteKey: 'public-site-key' });
+  assert.deepEqual(publicConfigView(configured).oauth, { google: true });
+  assert.ok(!JSON.stringify(publicConfigView(configured)).includes('private-'));
+
+  assert.throws(() => loadConfig({ ...PROD_ENV, TURNSTILE_ENABLED: 'true' }), /TURNSTILE_SITE_KEY/);
+  assert.throws(() => loadConfig({ ...PROD_ENV, GOOGLE_CLIENT_ID: 'client-id' }), /BOTH GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/);
+  assert.throws(() => loadConfig({
+    ...PROD_ENV,
+    GOOGLE_CLIENT_ID: 'client-id', GOOGLE_CLIENT_SECRET: 'secret',
+    GOOGLE_REDIRECT_URI: 'https://attacker.example/api/auth/google/callback'
+  }), /must be https:\/\/finzz\.test/);
+});
+
+
+test('Google OAuth exchanges the code server-side with PKCE and requires a verified Google identity', async () => {
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    APP_URL: 'https://finzz.test',
+    GOOGLE_CLIENT_ID: 'client-id',
+    GOOGLE_CLIENT_SECRET: 'client-secret'
+  });
+  assert.equal(config.oauth.redirectUri, 'https://finzz.test/api/auth/google/callback');
+  const oauth = createGoogleOAuth(config);
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes('oauth2.googleapis.com/token')) {
+      return new Response(JSON.stringify({ access_token: 'private-access-token' }), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      });
+    }
+    return new Response(JSON.stringify({
+      sub: 'google-subject', email: 'Person@Example.test', email_verified: true, name: 'Nama Google'
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    assert.equal(oauth.available, true);
+    const authorize = new URL(oauth.authorizeUrl({ state: 'state', codeChallenge: 'challenge' }));
+    assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
+    const identity = await oauth.authenticate('authorization-code', 'secret-verifier');
+    assert.deepEqual(identity, { provider: 'google', email: 'person@example.test', name: 'Nama Google' });
+    assert.equal(calls.length, 2);
+    const tokenBody = new URLSearchParams(calls[0].options.body);
+    assert.equal(tokenBody.get('code'), 'authorization-code');
+    assert.equal(tokenBody.get('client_secret'), 'client-secret');
+    assert.equal(tokenBody.get('code_verifier'), 'secret-verifier');
+    assert.match(calls[1].options.headers.Authorization, /^Bearer private-access-token$/);
+    assert.ok(!JSON.stringify(identity).includes('private-access-token'), 'provider tokens never leave the server');
+
+    globalThis.fetch = async (url) => String(url).includes('oauth2.googleapis.com/token')
+      ? new Response(JSON.stringify({ access_token: 'private-access-token' }), { status: 200 })
+      : new Response(JSON.stringify({ sub: 'google-subject', email: 'person@example.test', email_verified: false }), { status: 200 });
+    await assert.rejects(() => oauth.authenticate('authorization-code', 'secret-verifier'), (err) => err.code === 'OAUTH_EMAIL_UNVERIFIED');
+
+    globalThis.fetch = async () => new Response('x'.repeat(70 * 1024), { status: 200 });
+    await assert.rejects(() => oauth.authenticate('authorization-code', 'secret-verifier'), (err) => err.code === 'OAUTH_PROVIDER_FAILED');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test('brands: catalogue is deduplicated by app id, known marks are colored, unknowns stay wordmarks', async () => {
+  const brands = marqueeBrands([
+    { id: 'wa', name: 'WhatsApp' },
+    { id: 'wa', name: 'WhatsApp duplikat dari baris layanan' },
+    { id: 'tg', name: 'Telegram' },
+    { id: 'new-app', name: 'Layanan Baru' },
+    { id: 'ub', name: 'Uber' }
+  ]);
+  assert.deepEqual(brands.map((brand) => brand.id), ['wa', 'tg', 'new-app', 'ub']);
+  assert.equal(brands[0].src, '/assets/brands/whatsapp.svg');
+  assert.equal(brands[2].src, null);
+  assert.equal(brands[2].label, 'Layanan Baru');
+  assert.equal(brands[3].src, null, 'brands without an approved asset remain wordmarks');
+  assert.deepEqual(splitRows(brands.slice(0, 2), 2).map((row) => row.length), [1, 1]);
+  const whatsappSvg = await readFile(path.join(ROOT, 'public/assets/brands/whatsapp.svg'), 'utf8');
+  const googleSvg = await readFile(path.join(ROOT, 'public/assets/brands/google.svg'), 'utf8');
+  assert.match(whatsappSvg, /fill="#25D366"/);
+  assert.match(googleSvg, /fill="#4285F4"/);
+});
 
 // ============================================================ pricing engine
 test('pricing: total always equals supplier + markup + tax, in integers', () => {
@@ -477,7 +624,7 @@ test('every bundled brand SVG is sanitised and offline', async () => {
     assert.ok(!/https?:\/\//i.test(withoutNamespace), `${file}: no external URLs`);
     assert.ok(!/<image|<use|xlink:href/i.test(svg), `${file}: no embedded references`);
     assert.match(svg, /viewBox="0 0 24 24"/, `${file}: fixed viewBox prevents layout shift`);
-    assert.match(svg, /fill="currentColor"/, `${file}: inherits theme colour`);
+    assert.match(svg, /fill="#[0-9A-Fa-f]{6}"/, `${file}: uses the approved brand colour instead of a monochrome theme fill`);
     assert.match(svg, /aria-label="/, `${file}: has an accessible name`);
   }
 });

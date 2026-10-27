@@ -98,13 +98,12 @@ export function icon(name, { size = 18, strokeWidth = 1.7, className = '', label
   return svg;
 }
 
-export const BRAND_MARK_SVG = `<svg viewBox="0 0 48 48" width="34" height="34" role="img" aria-label="FINZZ Store">
-  <defs><linearGradient id="fz-brand" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#2ee6b6"/>
-  </linearGradient></defs>
-  <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#fz-brand)"/>
-  <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#06070d"/>
-  <circle cx="34.5" cy="31.5" r="2.4" fill="#06070d" opacity="0.75"/>
+export const BRAND_MARK_SVG = `<svg viewBox="0 0 48 48" width="36" height="36" role="img" aria-label="FINZZ Store" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1.5" y="1.5" width="45" height="45" rx="15" fill="#101522" stroke="rgba(148,163,198,.22)" stroke-width="1.2"/>
+  <rect x="5.5" y="5.5" width="37" height="37" rx="12" fill="#151d30"/>
+  <path d="M16 34V18a5 5 0 0 1 5-5h12.5" fill="none" stroke="#7c8cff" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M16.4 23.5h12.2" fill="none" stroke="#2ee6b6" stroke-width="4.6" stroke-linecap="round"/>
+  <circle cx="33.7" cy="33.1" r="2.8" fill="#2ee6b6"/>
 </svg>`;
 
 export const iconNames = Object.keys(PATHS);

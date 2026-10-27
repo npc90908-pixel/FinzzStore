@@ -48,7 +48,7 @@ Setiap SVG ditulis ulang oleh skrip, bukan disalin mentah:
 1. Jika mengandung `<script>`, atribut `on*=`, `xlink:href`, `<image>`, `<use>`,
    atau URL absolut → berkas **ditolak** (tidak ada yang ditolak saat ini).
 2. Hanya `<path d="…">` yang dipertahankan, dibungkus `<svg viewBox="0 0 24 24">`.
-3. `fill="currentColor"` supaya warna mengikuti tema, bukan warna merek.
+3. `fill` memakai warna identitas merek yang paling dikenal agar logo tetap berwarna dan terbaca pada strip layanan. Untuk X yang identitasnya hitam/putih, file memakai hitam dan CSS membaliknya khusus tema gelap.
 4. `role="img"` + `aria-label` untuk pembaca layar.
 
 Hasilnya: tidak ada JavaScript, tidak ada referensi eksternal, tidak ada

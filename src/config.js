@@ -90,8 +90,47 @@ export function loadConfig(env = process.env) {
   if (isProduction && bool(env.AUTH_EXPOSE_DEV_TOKENS, false)) {
     throw new ConfigError('AUTH_EXPOSE_DEV_TOKENS must never be enabled in production.');
   }
-  if (isProduction && bool(env.TURNSTILE_ENABLED, false) && !env.TURNSTILE_SECRET_KEY) {
-    throw new ConfigError('TURNSTILE_ENABLED=true requires TURNSTILE_SECRET_KEY.');
+
+  // Optional integrations are presence-based: a feature switches itself on as
+  // soon as its credentials exist, so there is no separate ENABLED flag to
+  // keep in sync. A *partial* configuration is rejected outright — half a
+  // credential set can only produce a broken widget or a dead login button.
+  const turnstileKeyPair = [env.TURNSTILE_SITE_KEY, env.TURNSTILE_SECRET_KEY].filter((v) => String(v || '').trim());
+  if (turnstileKeyPair.length === 1) {
+    throw new ConfigError('Turnstile needs BOTH TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY, or neither.');
+  }
+  const turnstileRequested = bool(env.TURNSTILE_ENABLED, turnstileKeyPair.length === 2);
+  if (turnstileRequested && turnstileKeyPair.length !== 2) {
+    throw new ConfigError('TURNSTILE_ENABLED=true requires TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY.');
+  }
+  const googleCredentialCount = [env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET]
+    .filter((v) => String(v || '').trim()).length;
+  if (googleCredentialCount === 1) {
+    throw new ConfigError('Google OAuth needs BOTH GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, or neither.');
+  }
+  const googleOAuthRequested = bool(env.GOOGLE_OAUTH_ENABLED, googleCredentialCount === 2);
+  if (googleOAuthRequested && googleCredentialCount !== 2) {
+    throw new ConfigError('GOOGLE_OAUTH_ENABLED=true requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.');
+  }
+  // The standard callback is derived from APP_URL; the optional override is
+  // retained for unusual deployments but must still point at this callback.
+  const googleRedirectUri = String(env.GOOGLE_REDIRECT_URI || `${appUrl}/api/auth/google/callback`).trim();
+  if (googleCredentialCount === 2) {
+    let redirect;
+    try {
+      redirect = new URL(googleRedirectUri);
+    } catch {
+      throw new ConfigError('GOOGLE_REDIRECT_URI must be an absolute URL on this application.');
+    }
+    let appOrigin;
+    try {
+      appOrigin = new URL(appUrl).origin;
+    } catch {
+      throw new ConfigError('APP_URL must be a valid absolute URL before Google OAuth can be enabled.');
+    }
+    if (redirect.origin !== appOrigin || redirect.pathname !== '/api/auth/google/callback' || redirect.search || redirect.hash) {
+      throw new ConfigError(`GOOGLE_REDIRECT_URI must be ${appUrl}/api/auth/google/callback.`);
+    }
   }
 
   const supplierMode = (env.SUPPLIER_MODE || (env.TELEKOS_API_KEY ? 'live' : 'off')).toLowerCase();
@@ -188,8 +227,11 @@ export function loadConfig(env = process.env) {
     }),
 
     // ------------------------------------------------- Cloudflare Turnstile
+    // Presence-based: both keys turn the widget on automatically. Setting
+    // TURNSTILE_ENABLED=false explicitly still works as an emergency kill
+    // switch without having to remove the keys.
     turnstile: Object.freeze({
-      enabled: bool(env.TURNSTILE_ENABLED, false),
+      enabled: bool(env.TURNSTILE_ENABLED, turnstileKeyPair.length === 2) && turnstileKeyPair.length === 2,
       siteKey: (env.TURNSTILE_SITE_KEY || '').trim(),
       secretKey: (env.TURNSTILE_SECRET_KEY || '').trim(),
       expectedHostname: (env.TURNSTILE_HOSTNAME || '').trim() || null,
@@ -197,17 +239,14 @@ export function loadConfig(env = process.env) {
     }),
 
     // ------------------------------------------------------ Google OAuth
-    // Optional. The button is only rendered when `available` is true, which
-    // requires every credential AND the explicit enable flag.
+    // Optional. The login button renders only when `available` is true, which
+    // simply means every credential is present — no separate enable flag.
     oauth: Object.freeze({
-      enabled: bool(env.GOOGLE_OAUTH_ENABLED, false),
+      enabled: bool(env.GOOGLE_OAUTH_ENABLED, googleCredentialCount === 2) && googleCredentialCount === 2,
       clientId: (env.GOOGLE_CLIENT_ID || '').trim(),
       clientSecret: (env.GOOGLE_CLIENT_SECRET || '').trim(),
-      redirectUri: (env.GOOGLE_REDIRECT_URI || '').trim(),
-      available: bool(env.GOOGLE_OAUTH_ENABLED, false)
-        && Boolean(env.GOOGLE_CLIENT_ID)
-        && Boolean(env.GOOGLE_CLIENT_SECRET)
-        && Boolean(env.GOOGLE_REDIRECT_URI)
+      redirectUri: googleRedirectUri,
+      available: bool(env.GOOGLE_OAUTH_ENABLED, googleCredentialCount === 2) && googleCredentialCount === 2
     }),
 
     storeName: (env.STORE_NAME || 'FINZZ Store').trim(),

@@ -366,6 +366,80 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       return { user: publicUser(profile), profile, ...tokens };
     },
 
+    // ----------------------------------------------------- OAuth (Google)
+    // The provider has already proved ownership of a verified email, so this
+    // path neither asks for a password nor an OTP. An existing account is
+    // matched by email; a first-time visitor gets a normal profile + wallet
+    // with an unguessable random password (reset password still works later).
+    async loginWithProvider({ provider, email, name, req }) {
+      const normalised = String(email || '').trim().toLowerCase();
+      if (!normalised) throw new AppError('OAUTH_PROFILE_INVALID', 'Profil penyedia login tidak valid.', 400);
+
+      const existing = await db.profiles.byEmailWithSecret(normalised);
+      if (existing) {
+        if (existing.status !== 'active') throw errors.accountSuspended();
+        if (!existing.email_verified_at) {
+          await db.profiles.markEmailVerified(existing.id);
+        }
+        await db.call('rpc_note_login', { p_user_id: existing.id, p_success: true }).catch(() => {});
+        const profile = await readProfile(existing.id, existing.email);
+        const tokens = await issueSession({ userId: existing.id, req });
+        logger.info('provider sign-in', { provider, userId: existing.id });
+        return { user: publicUser(profile), profile, ...tokens, created: false };
+      }
+
+      const randomPassword = randomToken(24);
+      const passwordHash = await hashPassword(randomPassword);
+      const localPart = (normalised.split('@')[0] || 'user')
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 18) || 'user';
+      const candidates = [
+        localPart.padEnd(3, '1').slice(0, 24),
+        ...Array.from({ length: 4 }, (_, i) => `${localPart.slice(0, 16)}_${i + 2}`)
+      ];
+
+      let created = null;
+      for (const username of candidates) {
+        try {
+          created = await db.call('rpc_register_user', {
+            p_email: normalised,
+            p_password_hash: passwordHash,
+            p_username: username
+          });
+          break;
+        } catch (err) {
+          const code = String(err?.pgCode || err?.code || '');
+          if (code !== '23505' && code !== 'EMAIL_TAKEN') throw err;
+          // Either the email row appeared in a race, or only the username
+          // collided. Re-check by email; otherwise try the next candidate.
+          const raced = await db.profiles.byEmailWithSecret(normalised);
+          if (raced) {
+            if (raced.status !== 'active') throw errors.accountSuspended();
+            await db.profiles.markEmailVerified(raced.id);
+            const profile = await readProfile(raced.id, raced.email);
+            const tokens = await issueSession({ userId: raced.id, req });
+            logger.info('provider sign-in after race', { provider, userId: raced.id });
+            return { user: publicUser(profile), profile, ...tokens, created: false };
+          }
+        }
+      }
+      if (!created) {
+        throw new AppError('OAUTH_SIGNUP_FAILED', 'Akun tidak dapat dibuat dari login Google. Coba lagi.', 500);
+      }
+
+      const profile = created.profile;
+      await db.profiles.markEmailVerified(profile.id);
+      if (name) {
+        await db.profiles.update(profile.id, { full_name: name }).catch(() => {});
+      }
+      const verifiedProfile = await readProfile(profile.id, normalised);
+      const tokens = await issueSession({ userId: profile.id, req });
+      logger.info('provider account created', { provider, userId: profile.id });
+      return { user: publicUser(verifiedProfile), profile: verifiedProfile, ...tokens, created: true };
+    },
+
     // -------------------------------------------------------------- logout
     async logout(req) {
       const auth = await service.attach(req);

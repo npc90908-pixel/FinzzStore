@@ -181,13 +181,15 @@ export function clientIp(req, config) {
 // SECURITY HEADERS + CSP
 // ---------------------------------------------------------------------------
 export function securityHeaders(nonce, config) {
+  const turnstileSources = config?.turnstile?.enabled ? ' https://challenges.cloudflare.com' : '';
   const csp = [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}'`,
+    `script-src 'self' 'nonce-${nonce}'${turnstileSources}`,
     "style-src 'self'",
     "img-src 'self' data:",
     "font-src 'self'",
-    "connect-src 'self'",
+    `connect-src 'self'${turnstileSources}`,
+    ...(config?.turnstile?.enabled ? ["frame-src 'self' https://challenges.cloudflare.com"] : []),
     "form-action 'self'",
     "frame-ancestors 'none'",
     "base-uri 'none'",

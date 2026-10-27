@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">FINZZ Store — Nomor virtual, lebih simpel</title>
+  <desc id="desc">Nomor virtual dan kode OTP dalam satu dashboard.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset=".55" stop-color="#080b14"/>
+      <stop offset="1" stop-color="#0c171b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c8cff"/>
+      <stop offset="1" stop-color="#2ee6b6"/>
+    </linearGradient>
+    <radialGradient id="glowA">
+      <stop offset="0" stop-color="#7c8cff" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#7c8cff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB">
+      <stop offset="0" stop-color="#2ee6b6" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#2ee6b6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#171e30" stop-opacity=".96"/>
+      <stop offset="1" stop-color="#101522" stop-opacity=".94"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#000" flood-opacity=".42"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <ellipse cx="265" cy="145" rx="420" ry="360" fill="url(#glowA)"/>
+  <ellipse cx="1030" cy="500" rx="430" ry="350" fill="url(#glowB)"/>
+  <path d="M0 508h1200M0 555h1200" stroke="#aab7db" stroke-opacity=".045"/>
+  <g fill="none" stroke="#aab7db" stroke-opacity=".045">
+    <path d="M80 0v630M128 0v630M1072 0v630M1120 0v630"/>
+  </g>
+
+  <!-- Brand lockup -->
+  <g transform="translate(86 74)">
+    <rect width="54" height="54" rx="18" fill="#101522" stroke="#67738e" stroke-opacity=".42"/>
+    <rect x="5" y="5" width="44" height="44" rx="14" fill="#151d30"/>
+    <path d="M18 39V21a5 5 0 0 1 5-5h15" fill="none" stroke="#7c8cff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M18 27h14" fill="none" stroke="#2ee6b6" stroke-width="4.5" stroke-linecap="round"/>
+    <circle cx="39" cy="38" r="2.8" fill="#2ee6b6"/>
+    <text x="70" y="27" fill="#f3f5ff" font-family="DejaVu Sans, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">FINZZ</text>
+    <text x="71" y="47" fill="#919bb4" font-family="DejaVu Sans, Arial, sans-serif" font-size="10" font-weight="600" letter-spacing="3">STORE</text>
+  </g>
+
+  <!-- Headline -->
+  <text x="88" y="238" fill="#f5f6ff" font-family="DejaVu Sans, Arial, sans-serif" font-size="53" font-weight="700" letter-spacing="-2">Verifikasi akun,</text>
+  <text x="88" y="302" fill="url(#accent)" font-family="DejaVu Sans, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-2.3">lebih simpel.</text>
+  <text x="91" y="355" fill="#b3bdd3" font-family="DejaVu Sans, Arial, sans-serif" font-size="21">Nomor virtual dan kode OTP dalam satu dashboard.</text>
+  <g transform="translate(90 405)">
+    <rect width="342" height="48" rx="24" fill="#141c2c" stroke="#8a97b6" stroke-opacity=".22"/>
+    <circle cx="25" cy="24" r="5" fill="#2ee6b6"/>
+    <text x="43" y="30" fill="#dce2f4" font-family="DejaVu Sans, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="1.35">CEPAT  ·  AMAN  ·  TRANSPARAN</text>
+  </g>
+  <text x="91" y="530" fill="#8e99b2" font-family="DejaVu Sans, Arial, sans-serif" font-size="15">Satu tempat untuk nomor, saldo, dan riwayat verifikasi.</text>
+
+  <!-- Dashboard preview, intentionally illustrative with no stock/price claims -->
+  <g transform="translate(667 108)" filter="url(#shadow)">
+    <rect width="430" height="425" rx="28" fill="url(#glass)" stroke="#8995b3" stroke-opacity=".24"/>
+    <path d="M0 90h430" stroke="#8995b3" stroke-opacity=".14"/>
+    <circle cx="36" cy="44" r="15" fill="#202b43"/>
+    <path d="M30 45h12M36 39v12" stroke="#7c8cff" stroke-width="2" stroke-linecap="round"/>
+    <text x="65" y="42" fill="#eef1ff" font-family="DejaVu Sans, Arial, sans-serif" font-size="15" font-weight="700">Ruang order Anda</text>
+    <text x="65" y="61" fill="#8792aa" font-family="DejaVu Sans, Arial, sans-serif" font-size="11">Nomor dan status tampil jelas</text>
+    <rect x="28" y="115" width="374" height="184" rx="19" fill="#0c111c" stroke="#7885a5" stroke-opacity=".2"/>
+    <rect x="48" y="136" width="41" height="41" rx="14" fill="#132b25"/>
+    <path d="M61 157c2-7 12-11 17-4 4 6-5 14-9 17-4-3-11-8-8-13Z" fill="none" stroke="#2ee6b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="104" y="151" fill="#eef1ff" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="700">Layanan terpilih</text>
+    <text x="104" y="171" fill="#8994ad" font-family="DejaVu Sans, Arial, sans-serif" font-size="11">Status order diperbarui otomatis</text>
+    <rect x="308" y="143" width="72" height="25" rx="12.5" fill="#102d27"/>
+    <circle cx="322" cy="155.5" r="3" fill="#2ee6b6"/>
+    <text x="332" y="159" fill="#75e7c7" font-family="DejaVu Sans, Arial, sans-serif" font-size="10" font-weight="700">AKTIF</text>
+    <path d="M48 199h334" stroke="#7885a5" stroke-opacity=".14"/>
+    <text x="49" y="227" fill="#8994ad" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" letter-spacing=".7">KODE VERIFIKASI</text>
+    <g transform="translate(49 243)">
+      <rect width="209" height="37" rx="11" fill="#141c2d"/>
+      <circle cx="19" cy="18.5" r="4" fill="#7c8cff"/>
+      <circle cx="37" cy="18.5" r="4" fill="#7c8cff" opacity=".65"/>
+      <circle cx="55" cy="18.5" r="4" fill="#7c8cff" opacity=".35"/>
+      <circle cx="73" cy="18.5" r="4" fill="#7c8cff" opacity=".2"/>
+      <text x="95" y="23" fill="#dbe2f5" font-family="DejaVu Sans, Arial, sans-serif" font-size="11">tampil privat</text>
+    </g>
+    <rect x="28" y="320" width="374" height="72" rx="17" fill="#141b2a" stroke="#7885a5" stroke-opacity=".14"/>
+    <circle cx="58" cy="356" r="14" fill="#222a3c"/>
+    <path d="M52 356h12M58 350v12" stroke="#2ee6b6" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="84" y="352" fill="#e7ebf8" font-family="DejaVu Sans, Arial, sans-serif" font-size="12" font-weight="600">Aktivitas tercatat</text>
+    <text x="84" y="370" fill="#8792aa" font-family="DejaVu Sans, Arial, sans-serif" font-size="10">Saldo dan riwayat dalam satu tempat</text>
+    <path d="M358 359h20m-6-6 6 6-6 6" fill="none" stroke="#2ee6b6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="1102" y="587" text-anchor="end" fill="#747f98" font-family="DejaVu Sans, Arial, sans-serif" font-size="11" letter-spacing=".7">FINZZSTORE</text>
+</svg>
