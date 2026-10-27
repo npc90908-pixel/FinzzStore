@@ -107,6 +107,14 @@ Useful scripts:
 Apply the SQL files **in order** — in the Supabase SQL editor if the database
 lives there, or with `psql` against any PostgreSQL 15+ server:
 
+For a Vercel runtime, set `DATABASE_URL` to Supabase's **Transaction Pooler**
+connection string (port `6543`). Do not use the Session Pooler on port `5432`
+for serverless traffic: its per-project session limit can be exhausted as
+function instances scale. The Vercel runtime also caps its local `pg` pool at
+one connection per instance and closes idle connections after five seconds.
+Use a direct/session connection separately for administrative migration work
+if that operation requires session-level behavior.
+
 ```bash
 psql "$DATABASE_URL" -f database/schema.sql      # tables, enums, indexes, constraints
 psql "$DATABASE_URL" -f database/policies.sql    # RLS + policies

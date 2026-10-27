@@ -13,8 +13,12 @@
 // ============================================================================
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { startTestApp } from './support/app-harness.mjs';
+import { createApplication } from '../src/bootstrap.js';
 import { createRateLimiter } from '../src/security.js';
 import { createLogger } from '../src/logging.js';
 import { scrubSecrets, fromDbError } from '../src/errors.js';
@@ -376,6 +380,30 @@ test('register still rejects an existing address with 409 EMAIL_TAKEN, not a 500
 });
 
 // ============================================ diagnostics / secret hygiene ===
+test('Vercel application cold start does not synchronously probe PostgreSQL', async () => {
+  const storageDir = await mkdtemp(path.join(os.tmpdir(), 'finzz-vercel-'));
+  let app;
+  try {
+    app = await createApplication({
+      env: {
+        NODE_ENV: 'production',
+        VERCEL: '1',
+        APP_URL: 'https://finzz.test',
+        APP_ENCRYPTION_KEY: 'a'.repeat(32),
+        DATABASE_URL: 'postgres://finzz:unused@127.0.0.1:1/finzz',
+        CRON_SECRET: 'c'.repeat(16),
+        SUPPLIER_MODE: 'off',
+        UPLOAD_DIR: storageDir
+      },
+      logger: silent
+    });
+    assert.equal(app.db.kind, 'pg');
+  } finally {
+    await app?.db.close();
+    await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
 test('database errors keep their cause for the logs and drop the secrets', () => {
   const err = fromDbError({
     code: 'PGRST202',
@@ -389,6 +417,18 @@ test('database errors keep their cause for the logs and drop the secrets', () =>
   assert.equal(err.rpc, 'rpc_public_summary');
   assert.ok(!JSON.stringify(err.diagnostic).includes('finzz_local_pw'), 'the DB password must be scrubbed');
   assert.ok(!JSON.stringify(err.diagnostic).includes('eyJhbGciOiJIUzI1NiJ9'), 'the JWT must be scrubbed');
+});
+
+test('Supabase session-pool exhaustion is classified as a retryable 503', () => {
+  const err = fromDbError({
+    code: 'XX000',
+    message: 'EMAXCONNSESSION: max clients reached in session mode - max clients are limited to pool_size: 15'
+  }, { table: 'deposits' });
+
+  assert.equal(err.status, 503);
+  assert.equal(err.code, 'DB_UNAVAILABLE');
+  assert.equal(err.diagnostic.pgCode, 'XX000');
+  assert.match(err.diagnostic.pgMessage, /EMAXCONNSESSION/);
 });
 
 test('scrubSecrets removes connection strings, supabase URLs and keys', () => {

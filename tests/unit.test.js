@@ -544,6 +544,21 @@ test('config: production refuses demo mode and the mock supplier', () => {
   assert.equal(config.supplier.mode, 'off');
 });
 
+test('config: Vercel keeps the PostgreSQL pool to one short-lived client per function', () => {
+  const vercel = loadConfig({
+    ...PROD_ENV,
+    VERCEL: '1',
+    DATABASE_POOL_MAX: '10',
+    DATABASE_IDLE_TIMEOUT: '30000'
+  });
+  assert.equal(vercel.isVercel, true);
+  assert.equal(vercel.database.poolMax, 1, 'an explicit larger pool must not multiply across serverless instances');
+  assert.equal(vercel.database.idleTimeoutMs, 5000);
+
+  const persistent = loadConfig({ ...PROD_ENV, DATABASE_POOL_MAX: '4' });
+  assert.equal(persistent.database.poolMax, 4, 'non-serverless deployments may still tune their pool');
+});
+
 test('config: demo credentials exist only for a non-production demo', () => {
   const demo = loadConfig({
     NODE_ENV: 'development',
