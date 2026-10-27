@@ -645,6 +645,64 @@ export function createPgDatabase(config, { logger } = {}) {
           p_max_pending: params.maxPending ?? 3
         });
       },
+      async createGateway(params) {
+        return call('rpc_create_astrapay_deposit', {
+          p_user_id: params.userId,
+          p_amount: params.amount,
+          p_reference: params.reference,
+          p_min_amount: params.minAmount,
+          p_max_amount: params.maxAmount,
+          p_max_pending: params.maxPending ?? 3,
+          p_expires_in: params.expiresIn ?? 600
+        });
+      },
+      async storeGatewayInvoice(params) {
+        return call('rpc_store_astrapay_invoice', {
+          p_deposit_id: params.depositId,
+          p_provider_order_id: params.providerOrderId,
+          p_reference: params.reference,
+          p_pay_amount: params.payAmount,
+          p_fee_amount: params.feeAmount,
+          p_checkout_url: params.checkoutUrl,
+          p_qris_payload: params.qris,
+          p_expires_at: params.expiresAt,
+          p_provider_status: params.providerStatus ?? 'pending'
+        });
+      },
+      async findGatewayByReference(reference) {
+        const { rows } = await query(
+          `select * from public.deposits where method = 'gateway' and provider_reference = $1 limit 1`,
+          [reference], { table: 'deposits' }
+        );
+        return rows[0] ?? null;
+      },
+      async listPendingGateway({ limit = 10 } = {}) {
+        const { rows } = await query(
+          `select * from public.deposits
+            where method = 'gateway' and status = 'pending'
+            order by created_at asc limit $1`,
+          [limit], { table: 'deposits' }
+        );
+        return { rows };
+      },
+      async confirmGatewayPayment(params) {
+        return call('rpc_confirm_astrapay_deposit', {
+          p_event_id: params.eventId,
+          p_event_type: params.eventType,
+          p_provider_order_id: params.providerOrderId,
+          p_reference: params.reference,
+          p_base_amount: params.baseAmount,
+          p_fee_amount: params.feeAmount,
+          p_pay_amount: params.payAmount,
+          p_paid_at: params.paidAt
+        });
+      },
+      async closeGatewayDeposit(depositId, providerStatus) {
+        return call('rpc_close_astrapay_deposit', {
+          p_deposit_id: depositId,
+          p_provider_status: providerStatus
+        });
+      },
       async get(id) {
         const { rows } = await query('select * from public.deposits where id = $1 limit 1', [id], { table: 'deposits' });
         return rows[0] ?? null;
@@ -656,6 +714,14 @@ export function createPgDatabase(config, { logger } = {}) {
           [userId, limit, offset], { table: 'deposits' }
         );
         return { rows, total: countRes.rows[0]?.total ?? 0 };
+      },
+      async listPendingByUser(userId, { limit = 10 } = {}) {
+        const { rows } = await query(
+          `select * from public.deposits where user_id = $1 and status = 'pending'
+            order by created_at desc limit $2`,
+          [userId, limit], { table: 'deposits' }
+        );
+        return { rows };
       },
       async adminList({ status = 'pending', limit = 30, offset = 0 } = {}) {
         const values = [];

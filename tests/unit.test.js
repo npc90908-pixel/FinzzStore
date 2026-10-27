@@ -32,6 +32,7 @@ import { marqueeBrands, splitRows } from '../public/js/brands.js';
 import { createGoogleOAuth } from '../src/auth-google.js';
 import { loadOptionalEnvFile } from '../src/env.js';
 import { createMailer, diagnoseSmtpError, passwordResetEmail, verificationEmail } from '../src/auth/mailer.js';
+import { createPaymentAdapter } from '../src/payment/adapter.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -592,6 +593,117 @@ test('config: optional integrations enable from complete credentials and never e
   }), /must be https:\/\/finzz\.test/);
 });
 
+
+test('config: AstraPay is opt-in, requires a complete HTTPS deployment config, and keeps credentials private', () => {
+  const disabled = loadConfig(PROD_ENV);
+  assert.equal(disabled.payment.enabled, false);
+  assert.deepEqual(publicConfigView(disabled).payment, { enabled: false, provider: null, mode: 'disabled' });
+
+  const enabled = loadConfig({
+    ...PROD_ENV,
+    ASTRAPAY_ENABLED: 'true',
+    ASTRAPAY_PROJECT_SLUG: 'finzz-project',
+    ASTRAPAY_API_KEY: 'unit-test-api-key-not-real',
+    ASTRAPAY_WEBHOOK_SECRET: 'unit-test-webhook-secret-not-real'
+  });
+  assert.equal(enabled.payment.enabled, true);
+  assert.deepEqual(publicConfigView(enabled).payment, { enabled: true, provider: 'astrapay', mode: 'live' });
+  const publicJson = JSON.stringify(publicConfigView(enabled));
+  assert.ok(!publicJson.includes('unit-test-api-key-not-real'));
+  assert.ok(!publicJson.includes('unit-test-webhook-secret-not-real'));
+  assert.throws(() => loadConfig({ ...PROD_ENV, ASTRAPAY_ENABLED: 'true' }), /project slug, API key, and webhook secret/);
+  assert.throws(() => loadConfig({
+    ...PROD_ENV,
+    NODE_ENV: 'test',
+    APP_URL: 'http://finzz.test',
+    ASTRAPAY_ENABLED: 'true',
+    ASTRAPAY_PROJECT_SLUG: 'finzz-project',
+    ASTRAPAY_API_KEY: 'key',
+    ASTRAPAY_WEBHOOK_SECRET: 'secret'
+  }), /public HTTPS origin/);
+});
+
+test('AstraPay adapter validates invoice details and verifies raw-body timestamped HMACs', async () => {
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    APP_URL: 'https://finzz.test',
+    ASTRAPAY_ENABLED: 'true',
+    ASTRAPAY_PROJECT_SLUG: 'finzz-project',
+    ASTRAPAY_API_KEY: 'unit-test-api-key-not-real',
+    ASTRAPAY_WEBHOOK_SECRET: 'unit-test-webhook-secret-not-real'
+  });
+  const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
+  const paidAt = new Date().toISOString();
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url: String(url), options });
+    const isCreate = options.method === 'POST';
+    return new Response(JSON.stringify({
+      ok: true,
+      data: {
+        id: 'order-1',
+        reference: 'FZ-UNIT-REF',
+        status: isCreate ? 'pending' : 'paid',
+        base_amount: 1000,
+        credit_amount: 1000,
+        fee_qris: 0,
+        service_fee: 0,
+        pay_amount: 1001,
+        checkout_url: 'https://gateway.astrapay.biz.id/pay/order-1',
+        qris: '000201-test-payload',
+        expires_at: expiresAt,
+        paid_at: isCreate ? null : paidAt
+      }
+    }), { status: isCreate ? 201 : 200, headers: { 'content-type': 'application/json' } });
+  };
+  const adapter = createPaymentAdapter(config, { fetchImpl: fakeFetch });
+  const invoice = await adapter.createPayment({
+    reference: 'FZ-UNIT-REF', amount: 1000, expiresIn: 600,
+    webhookUrl: 'https://finzz.test/api/webhooks/astrapay',
+    redirectUrl: 'https://finzz.test/wallet'
+  });
+  assert.equal(invoice.providerOrderId, 'order-1');
+  assert.equal(invoice.payAmount, 1001);
+  assert.equal(invoice.feeAmount, 0);
+  assert.equal(calls[0].options.headers['x-api-key'], 'unit-test-api-key-not-real');
+  assert.equal(calls[0].options.body.includes('1000'), true);
+
+  const remote = await adapter.checkStatus('order-1');
+  const paid = adapter.validatePaidOrder(remote, {
+    providerOrderId: 'order-1', reference: 'FZ-UNIT-REF', amount: 1000,
+    payAmount: 1001, expiresAt
+  });
+  assert.equal(paid.payAmount, 1001);
+  assert.equal(calls[1].options.method, 'GET');
+
+  const rawBody = Buffer.from('{"event":"order.paid","reference":"FZ-UNIT-REF"}');
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = `v1=${createHmac('sha256', 'unit-test-webhook-secret-not-real')
+    .update(Buffer.concat([Buffer.from(`${timestamp}.`), rawBody])).digest('hex')}`;
+  assert.equal(adapter.verifyWebhook({ rawBody, timestamp, signature }), true);
+  assert.equal(adapter.verifyWebhook({ rawBody: Buffer.from(`${rawBody} `), timestamp, signature }), false);
+  assert.equal(adapter.verifyWebhook({ rawBody, timestamp: '1', signature }), false);
+
+  const disabledWithCredentials = createPaymentAdapter(loadConfig({
+    NODE_ENV: 'test',
+    APP_URL: 'https://finzz.test',
+    ASTRAPAY_ENABLED: 'false',
+    ASTRAPAY_PROJECT_SLUG: 'finzz-project',
+    ASTRAPAY_API_KEY: 'unit-test-api-key-not-real',
+    ASTRAPAY_WEBHOOK_SECRET: 'unit-test-webhook-secret-not-real'
+  }), { fetchImpl: fakeFetch });
+  assert.equal(disabledWithCredentials.enabled, false);
+  assert.equal(disabledWithCredentials.configured, true);
+  assert.equal(disabledWithCredentials.verifyWebhook({ rawBody, timestamp, signature }), true, 'pending callbacks remain accepted while new invoices are disabled');
+  assert.equal(await disabledWithCredentials.checkStatus('order-1').then((row) => row.status), 'paid', 'existing invoices remain verifiable after new payment creation is disabled');
+  await assert.rejects(
+    () => disabledWithCredentials.createPayment({
+      reference: 'FZ-UNIT-REF', amount: 1000,
+      webhookUrl: 'https://finzz.test/api/webhooks/astrapay', redirectUrl: 'https://finzz.test/wallet'
+    }),
+    (error) => error.code === 'PAYMENT_GATEWAY_DISABLED'
+  );
+});
 
 test('config: SMTP defaults, sender inference, Gmail app passwords and TLS are consistent', () => {
   const gmail = loadConfig({

@@ -775,6 +775,159 @@ test('a rejected deposit never credits and requires a reason', async () => {
   assert.equal(await walletBalance(client), 0);
 });
 
+test('AstraPay deposits require a signed callback plus fresh provider verification and credit only base amount once', async () => {
+  const webhookSecret = 'astrapay-test-webhook-secret-not-real';
+  const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
+  const requests = [];
+  const providerOrders = new Map();
+  let nextOrderNumber = 0;
+  const fetchImpl = async (url, options) => {
+    requests.push({ url: String(url), options });
+    const creating = options.method === 'POST';
+    const requestBody = creating ? JSON.parse(options.body) : null;
+    if (creating && Number(requestBody.amount) === 2000) throw new Error('simulated ambiguous provider timeout');
+    const orderId = creating
+      ? `astrapay-order-${++nextOrderNumber}`
+      : decodeURIComponent(new URL(String(url)).pathname.split('/').at(-1));
+    const reference = creating ? requestBody.reference : providerOrders.get(orderId);
+    if (creating) providerOrders.set(orderId, reference);
+    const data = {
+      id: orderId,
+      reference,
+      status: creating ? 'pending' : 'paid',
+      base_amount: 1000,
+      credit_amount: 1000,
+      fee_qris: 0,
+      service_fee: 0,
+      pay_amount: 1001,
+      checkout_url: 'https://gateway.astrapay.biz.id/pay/astrapay-order-1',
+      qris: '000201-test-qris-payload',
+      expires_at: expiresAt,
+      paid_at: creating ? null : new Date().toISOString()
+    };
+    return new Response(JSON.stringify({ ok: true, data }), {
+      status: creating ? 201 : 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  };
+  const gateway = await startTestApp({
+    env: {
+      APP_URL: 'https://finzz.test',
+      ASTRAPAY_ENABLED: 'true',
+      ASTRAPAY_PROJECT_SLUG: 'finzz-unit-project',
+      ASTRAPAY_API_KEY: 'astrapay-test-api-key-not-real',
+      ASTRAPAY_WEBHOOK_SECRET: webhookSecret
+    },
+    paymentOptions: { fetchImpl }
+  });
+  try {
+    const client = gateway.client();
+    const { profile } = await registerUser(gateway, client, { email: email('astrapay') });
+    const adminClient = gateway.client();
+    const { profile: adminProfile } = await registerUser(gateway, adminClient, { email: email('astrapay-admin') });
+    promoteToAdmin(gateway, adminProfile.email);
+
+    const created = await client.post('/api/deposits/gateway', { amount: 1000 });
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.json.deposit.method, 'gateway');
+    assert.equal(created.json.deposit.status, 'pending');
+    assert.equal(created.json.payment.baseAmount, 1000);
+    assert.equal(created.json.payment.payAmount, 1001);
+    assert.equal(created.json.payment.feeAmount, 0);
+    assert.match(created.json.payment.checkoutUrl, /^https:\/\/gateway\.astrapay\.biz\.id\/pay\//);
+    assert.equal(await walletBalance(client), 0, 'invoice creation does not credit funds');
+    assert.ok(requests[0].options.headers['x-api-key']);
+
+    const adminApprove = await adminClient.post(`/api/admin/deposits/${created.json.deposit.id}/approve`, {});
+    assert.equal(adminApprove.status, 409);
+    assert.equal(adminApprove.json.error.code, 'PAYMENT_AUTO_REVIEW');
+    const adminReject = await adminClient.post(`/api/admin/deposits/${created.json.deposit.id}/reject`, { reason: 'Gateway payment pending' });
+    assert.equal(adminReject.status, 409);
+    assert.equal(adminReject.json.error.code, 'PAYMENT_AUTO_REVIEW');
+
+    const rawBody = JSON.stringify({
+      event: 'order.paid',
+      data: {
+        id: 'astrapay-order-1',
+        reference: created.json.deposit.payment.reference,
+        status: 'paid',
+        base_amount: 1000,
+        fee_qris: 0,
+        pay_amount: 1001
+      }
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signBody = (body) => createHmac('sha256', webhookSecret)
+      .update(Buffer.concat([Buffer.from(`${timestamp}.`), Buffer.from(body)]))
+      .digest('hex');
+    const signature = signBody(rawBody);
+    const invalid = await client.post('/api/webhooks/astrapay', rawBody, {
+      headers: { 'x-pg2-timestamp': timestamp, 'x-pg2-signature': `v1=${'0'.repeat(64)}` }
+    });
+    assert.equal(invalid.status, 401);
+    assert.equal(await walletBalance(client), 0, 'a forged webhook never credits');
+
+    const signedWrongAmountBody = JSON.stringify({
+      ...JSON.parse(rawBody),
+      data: { ...JSON.parse(rawBody).data, pay_amount: 1000 }
+    });
+    const wrongAmount = await client.post('/api/webhooks/astrapay', signedWrongAmountBody, {
+      headers: { 'x-pg2-timestamp': timestamp, 'x-pg2-signature': `v1=${signBody(signedWrongAmountBody)}` }
+    });
+    assert.equal(wrongAmount.status, 200);
+    assert.equal(wrongAmount.json.credited, false);
+    assert.equal(await walletBalance(client), 0, 'a signed callback with mismatched payable amount is not enough to credit');
+
+    const accepted = await client.post('/api/webhooks/astrapay', rawBody, {
+      headers: { 'x-pg2-timestamp': timestamp, 'x-pg2-signature': `v1=${signature}` }
+    });
+    assert.equal(accepted.status, 200, accepted.text);
+    assert.equal(accepted.json.credited, true);
+    assert.equal(requests.at(-1).options.method, 'GET', 'callback triggers an authenticated order-detail lookup');
+    assert.equal(await walletBalance(client), 1000, 'wallet receives base amount, not unique-code pay amount');
+    const ledger = gateway.db.store.transactions.filter((tx) => tx.reference_type === 'deposit' && tx.reference_id === created.json.deposit.id);
+    assert.equal(ledger.length, 1);
+    assert.equal(ledger[0].amount, 1000);
+    assert.equal(ledger[0].metadata.pay_amount, 1001);
+
+    const replay = await client.post('/api/webhooks/astrapay', rawBody, {
+      headers: { 'x-pg2-timestamp': timestamp, 'x-pg2-signature': `v1=${signature}` }
+    });
+    assert.equal(replay.status, 200);
+    assert.equal(replay.json.duplicate, true);
+    assert.equal(await walletBalance(client), 1000);
+    assert.equal(ledger.length, 1);
+
+    const reconciliationClient = gateway.client();
+    await registerUser(gateway, reconciliationClient, { email: email('astrapay-reconciliation') });
+    const secondInvoice = await reconciliationClient.post('/api/deposits/gateway', { amount: 1000 });
+    assert.equal(secondInvoice.status, 201, secondInvoice.text);
+    const reconciled = await gateway.jobs.reconciliation.runOnce();
+    assert.equal(reconciled.payments.checked, 1);
+    assert.equal(reconciled.payments.credited, 1);
+    assert.equal(await walletBalance(reconciliationClient), 1000, 'scheduled server reconciliation can verify a missed callback');
+
+    const uncertainClient = gateway.client();
+    const { profile: uncertainProfile } = await registerUser(gateway, uncertainClient, { email: email('astrapay-timeout') });
+    const uncertain = await uncertainClient.post('/api/deposits/gateway', { amount: 2000 });
+    assert.equal(uncertain.status, 503);
+    assert.equal(await walletBalance(uncertainClient), 0, 'ambiguous invoice creation does not credit');
+    const uncertainDeposit = [...gateway.db.store.deposits.values()].find((row) =>
+      row.user_id === uncertainProfile.id && row.method === 'gateway'
+    );
+    assert.equal(uncertainDeposit.status, 'pending', 'uncertain provider outcome is not falsely marked cancelled');
+    assert.equal(uncertainDeposit.provider_order_id, null);
+    uncertainDeposit.expires_at = new Date(Date.now() - 1000).toISOString();
+    const expiredIntent = await gateway.jobs.reconciliation.runOnce();
+    assert.equal(expiredIntent.payments.expired, 1);
+    assert.equal(uncertainDeposit.status, 'cancelled');
+    assert.equal(await walletBalance(uncertainClient), 0);
+    assert.ok(profile.id);
+  } finally {
+    await gateway.close();
+  }
+});
+
 // ------------------------------------------------------------- webhook -----
 test('webhooks reject forged signatures and apply genuine ones', async () => {
   const client = h.client();

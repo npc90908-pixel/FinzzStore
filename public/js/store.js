@@ -107,5 +107,7 @@ export const DEPOSIT_STATUS_META = {
 };
 
 export const statusMeta = (status) => STATUS_META[status] || { label: status || 'Tidak diketahui', tone: 'neutral' };
-export const depositStatusMeta = (status) =>
-  DEPOSIT_STATUS_META[status] || { label: status || 'Tidak diketahui', tone: 'neutral' };
+export const depositStatusMeta = (status, method = null) => {
+  if (status === 'pending' && method === 'gateway') return { label: 'Menunggu pembayaran', tone: 'info' };
+  return DEPOSIT_STATUS_META[status] || { label: status || 'Tidak diketahui', tone: 'neutral' };
+};

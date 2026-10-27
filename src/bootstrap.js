@@ -28,7 +28,7 @@ import { createRateLimiter } from './security.js';
 import { mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-export async function createApplication({ env = process.env, logger, supplierOptions = null } = {}) {
+export async function createApplication({ env = process.env, logger, supplierOptions = null, paymentOptions = null } = {}) {
   if (!logger) throw new Error('createApplication requires a logger');
   const config = loadConfig(env);
 
@@ -61,9 +61,9 @@ export async function createApplication({ env = process.env, logger, supplierOpt
 
   const catalog = createCatalogService({ db, supplier, settings, logger, config });
   const orders = createOrderService({ db, supplier, settings, catalog, logger, config });
-  const wallet = createWalletService({ db, settings, orders });
-  const deposits = createDepositService({ db, settings, config, logger });
-  const payment = createPaymentAdapter(config, { logger });
+  const payment = createPaymentAdapter(config, { logger, ...(paymentOptions || {}) });
+  const wallet = createWalletService({ db, settings, orders, payment });
+  const deposits = createDepositService({ db, settings, config, payment, logger });
   const jobsState = {};
   const rateLimiter = createRateLimiter({ db, logger });
   const notifications = createNotificationService({ db, logger });
@@ -88,7 +88,7 @@ export async function createApplication({ env = process.env, logger, supplierOpt
 
   const jobs = {
     poller: createOrderPoller({ db, orders, logger, config }),
-    reconciliation: createReconciliationJob({ db, orders, catalog, auth, logger, config, state: jobsState })
+    reconciliation: createReconciliationJob({ db, orders, catalog, auth, deposits, logger, config, state: jobsState })
   };
   services.jobs = jobs;
 

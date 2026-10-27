@@ -270,7 +270,7 @@ test('RLS: anonymous visitors can read the public catalog only', async () => {
 
 test('RLS: internal tables (sessions, rate limits, leases) are service-role only', async () => {
   const user = await createUser(db, `sess-${randomUUID()}@finzz.test`);
-  for (const table of ['sessions', 'rate_limits', 'job_leases', 'idempotency_keys', 'supplier_webhook_events']) {
+  for (const table of ['sessions', 'rate_limits', 'job_leases', 'idempotency_keys', 'supplier_webhook_events', 'payment_webhook_events']) {
     await asUser(db, user, async () => {
       await assert.rejects(db.query(`select * from public.${table}`), /permission denied/i, table);
     });
@@ -519,6 +519,57 @@ test('deposit lifecycle: minimum enforced, approved once, double approval blocke
   const { rows } = await db.query(`select count(*)::int n from public.wallet_transactions
     where user_id = $1 and type = 'deposit'`, [user]);
   assert.equal(rows[0].n, 1);
+});
+
+test('AstraPay deposits credit only once through the verified, exact server RPC', async () => {
+  const user = await createUser(db, `astra-${randomUUID()}@finzz.test`);
+  const reference = `FZ-${randomUUID().replace(/-/g, '')}`;
+  await expectDbError(
+    () => db.query(`select public.rpc_create_astrapay_deposit($1, 999, $2, 100, 5000000, 3, 600)`, [user, reference]),
+    'DEPOSIT_BELOW_MINIMUM'
+  );
+  const created = await db.query(
+    `select public.rpc_create_astrapay_deposit($1, 1000, $2, 100, 5000000, 3, 600) as r`,
+    [user, reference]
+  );
+  const depositId = created.rows[0].r.deposit.id;
+  assert.equal(created.rows[0].r.deposit.method, 'gateway');
+  assert.equal(created.rows[0].r.deposit.status, 'pending');
+  assert.equal(await walletBalance(db, user), 0, 'creating an invoice never credits the wallet');
+
+  const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
+  await db.query(`select public.rpc_store_astrapay_invoice($1,$2,$3,1001,0,$4,$5,$6,'pending')`, [
+    depositId,
+    'order-1',
+    reference,
+    'https://gateway.astrapay.biz.id/pay/order-1',
+    '000201010212-qris-payload',
+    expiresAt
+  ]);
+
+  const eventId = createHash('sha256').update(`webhook:${reference}`).digest('hex');
+  await expectDbError(
+    () => db.query(`select public.rpc_confirm_astrapay_deposit($1,'order.paid','order-1',$2,999,0,1001,now())`, [eventId, reference]),
+    'PAYMENT_AMOUNT_MISMATCH'
+  );
+  assert.equal(await walletBalance(db, user), 0, 'amount mismatch is rejected before any ledger credit');
+
+  const confirmed = await db.query(
+    `select public.rpc_confirm_astrapay_deposit($1,'order.paid','order-1',$2,1000,0,1001,now()) as r`,
+    [eventId, reference]
+  );
+  assert.equal(confirmed.rows[0].r.credited, true);
+  assert.equal(await walletBalance(db, user), 1000, 'unique payment code is not included in wallet credit');
+  const duplicate = await db.query(
+    `select public.rpc_confirm_astrapay_deposit($1,'order.paid','order-1',$2,1000,0,1001,now()) as r`,
+    [eventId, reference]
+  );
+  assert.equal(duplicate.rows[0].r.duplicate, true);
+  assert.equal(await walletBalance(db, user), 1000, 'event replay cannot credit twice');
+  await expectDbError(
+    () => db.query(`select public.rpc_approve_deposit($1,$2,1000,'manual',null,null)`, [depositId, adminId]),
+    'PAYMENT_AUTO_REVIEW'
+  );
 });
 
 test('deposit rejection works and never credits the wallet', async () => {

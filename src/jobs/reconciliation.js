@@ -6,11 +6,12 @@
 //      (never auto-refunded: we cannot prove the supplier has no order)
 //   2. delete expired server sessions
 //   3. re-sync orders stuck in `needs_review`
+//   4. verify a bounded batch of pending AstraPay invoices server-side
 // Every 30 minutes: refresh the supplier catalogue (separate lease).
 // ============================================================================
 import { randomUUID } from 'node:crypto';
 
-export function createReconciliationJob({ db, orders, catalog, auth, logger, config, state }) {
+export function createReconciliationJob({ db, orders, catalog, auth, deposits, logger, config, state }) {
   const workerId = `recon-${process.pid}-${randomUUID().slice(0, 8)}`;
   let timer = null;
   let catalogTimer = null;
@@ -19,6 +20,9 @@ export function createReconciliationJob({ db, orders, catalog, auth, logger, con
     orphaned: 0,
     needsReviewRetried: 0,
     sessionsCleaned: 0,
+    paymentChecks: 0,
+    paymentsCredited: 0,
+    paymentsExpired: 0,
     catalogSyncs: 0,
     lastRunAt: null,
     lastCatalogSyncAt: null,
@@ -49,10 +53,17 @@ export function createReconciliationJob({ db, orders, catalog, auth, logger, con
         stats.sessionsCleaned += 1;
       }
 
+      const payments = deposits
+        ? await deposits.reconcileGatewayPending({ limit: 10 })
+        : { checked: 0, credited: 0, expired: 0 };
+      stats.paymentChecks += payments.checked || 0;
+      stats.paymentsCredited += payments.credited || 0;
+      stats.paymentsExpired += payments.expired || 0;
+
       stats.runs += 1;
       stats.lastRunAt = new Date().toISOString();
       if (orphaned) logger.warn('orders flagged for review', { count: orphaned });
-      return { orphaned, retried: stats.needsReviewRetried };
+      return { orphaned, retried: stats.needsReviewRetried, payments };
     } catch (err) {
       stats.lastError = { at: new Date().toISOString(), message: err?.message };
       logger.error('reconciliation failed', { error: err?.message });
