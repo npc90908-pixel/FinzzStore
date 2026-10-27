@@ -24,7 +24,7 @@ export default async function profilePage(ctx) {
 
   const { shell } = appShell(layout, 'profile', content);
 
-  const render = (profile, session) => {
+  const render = (profile, session, loginMethods) => {
     // ------------------------------------------------------------ profile form
     const profileForm = el('form', { class: 'stack', attrs: { novalidate: true } });
     const profileError = el('div');
@@ -106,8 +106,8 @@ export default async function profilePage(ctx) {
     });
 
     // ------------------------------------------------------------ session card
-    const sessionCard = Card({ title: 'Sesi & keamanan', subtitle: 'Sesi disimpan di server dengan cookie HttpOnly' },
-      el('div', { class: 'stack' },
+    const sessionCard = Card({ title: 'Sesi & keamanan', subtitle: 'Sesi disimpan di server dengan cookie HttpOnly',
+      children: el('div', { class: 'stack' },
         KeyValue({
           items: [
             { label: 'Sesi dimulai', value: formatDate(session.createdAt) },
@@ -146,10 +146,70 @@ export default async function profilePage(ctx) {
           }
         })
       )
-    );
+    });
 
-    const accountCard = Card({ title: 'Status akun' },
-      el('div', { class: 'stack' },
+    // ------------------------------------------------------- login methods
+    const googleIdentity = loginMethods.identities.find((identity) => identity.provider === 'google');
+    const googleOAuthEnabled = Boolean(store.get('publicSettings')?.app?.oauth?.google);
+    const loginMethodsCard = Card({ title: 'Metode masuk', subtitle: 'Google hanya ditautkan setelah Anda masuk ke akun FINZZ ini.',
+      children: el('div', { class: 'stack' },
+        el('div', { class: 'row row--between row--wrap' },
+          el('span', { class: 'text-sm text-muted', text: 'Password akun' }),
+          Badge({ tone: loginMethods.passwordEnabled ? 'success' : 'warning', children: loginMethods.passwordEnabled ? 'Aktif' : 'Belum diatur' })
+        ),
+        loginMethods.passwordEnabled
+          ? null
+          : Alert({ tone: 'info', title: 'Atur password untuk opsi pemulihan', children: 'Akun ini menggunakan Google. Tautan password melalui email dapat dipakai untuk menambahkan metode masuk lain sebelum Google dilepas.' }),
+        googleIdentity
+          ? el('div', { class: 'stack' },
+              el('div', { class: 'row row--between row--wrap' },
+                el('span', { class: 'text-sm text-muted', text: 'Google' }),
+                Badge({ tone: 'success', dot: true, children: 'Terhubung' })
+              ),
+              el('div', { class: 'text-sm', text: googleIdentity.email || 'Email Google terverifikasi' }),
+              googleIdentity.linkedAt ? el('div', { class: 'text-xs text-dim', text: `Ditautkan ${formatDate(googleIdentity.linkedAt)}` }) : null,
+              loginMethods.passwordEnabled
+                ? Button({ variant: 'danger', size: 'sm', iconName: 'link', children: 'Lepas Google', onClick: () => {
+                    const passwordInput = Input({ label: 'Password akun FINZZ', name: 'password', type: 'password', autocomplete: 'current-password', required: true });
+                    const errorArea = el('div');
+                    const confirm = Button({ variant: 'danger', children: 'Lepas Google', onClick: async () => {
+                      try {
+                        await api.post('/api/auth/google/unlink', { password: passwordInput.querySelector('input')?.value || '' });
+                        modal.close();
+                        toast({ type: 'success', title: 'Google dilepas' });
+                        window.location.assign('/profile');
+                      } catch (err) {
+                        errorArea.replaceChildren(Alert({ tone: 'danger', title: 'Tidak dapat melepas Google', children: err instanceof ApiError ? err.message : 'Coba lagi.' }));
+                      }
+                    } });
+                    const modal = Modal({
+                      title: 'Lepas Google dari akun?',
+                      body: el('div', { class: 'stack' },
+                        el('p', { class: 'text-sm text-muted', text: 'Untuk mencegah akun terkunci, masukkan password FINZZ yang aktif. Jika lupa, batalkan lalu atur password melalui pemulihan email.' }),
+                        passwordInput,
+                        errorArea
+                      ),
+                      actions: [Button({ variant: 'ghost', children: 'Batal', onClick: () => modal.close() }), confirm]
+                    });
+                  } })
+                : Button({ variant: 'outline', size: 'sm', iconName: 'mail', children: 'Atur password melalui email', onClick: () => navigate(`/forgot-password?email=${encodeURIComponent(profile.email)}`) })
+            )
+          : googleOAuthEnabled
+            ? Button({ variant: 'outline', iconName: 'link', children: 'Tautkan Google', onClick: async () => {
+                try {
+                  const result = await api.post('/api/auth/google/link', {});
+                  if (!result.authorizeUrl) throw new Error('URL otorisasi tidak tersedia');
+                  window.location.assign(result.authorizeUrl);
+                } catch (err) {
+                  toast({ type: 'error', title: 'Gagal memulai penautan', message: err instanceof ApiError ? err.message : 'Coba lagi.' });
+                }
+              } })
+            : Alert({ tone: 'info', title: 'Google belum tersedia', children: 'Login Google belum dikonfigurasi pada aplikasi ini.' })
+      )
+    });
+
+    const accountCard = Card({ title: 'Status akun',
+      children: el('div', { class: 'stack' },
         el('div', { class: 'row row--between' },
           el('span', { class: 'text-sm text-muted', text: 'Role' }),
           Badge({ tone: profile.role === 'admin' ? 'brand' : 'neutral', children: profile.role })
@@ -165,20 +225,35 @@ export default async function profilePage(ctx) {
         el('div', { class: 'divider' }),
         Button({ variant: 'outline', size: 'sm', iconName: 'wallet', children: 'Buka saldo', onClick: () => navigate('/wallet') })
       )
-    );
+    });
 
     area.replaceChildren(
       el('div', { class: 'stack' },
-        Card({ title: 'Data profil', subtitle: 'Email tidak dapat diubah dari sini' }, profileForm),
-        Card({ title: 'Password', subtitle: 'Gunakan password unik yang tidak dipakai di layanan lain' }, passwordForm)
+        Card({ title: 'Data profil', subtitle: 'Email tidak dapat diubah dari sini', children: profileForm }),
+        loginMethods.passwordEnabled
+          ? Card({ title: 'Password', subtitle: 'Gunakan password unik yang tidak dipakai di layanan lain', children: passwordForm })
+          : Card({ title: 'Password', subtitle: 'Akun ini belum memiliki password lokal.',
+              children: el('div', { class: 'stack' },
+                el('p', { class: 'text-sm text-muted', text: 'Untuk mengaktifkan password FINZZ, minta tautan reset melalui email terverifikasi.' }),
+                Button({ variant: 'outline', iconName: 'mail', children: 'Atur password melalui email', onClick: () => navigate(`/forgot-password?email=${encodeURIComponent(profile.email)}`) })
+              )
+            })
       ),
-      el('div', { class: 'stack' }, accountCard, sessionCard)
+      el('div', { class: 'stack' }, loginMethodsCard, accountCard, sessionCard)
     );
   };
 
   try {
-    const data = await api.get('/api/profile');
-    render(data.profile, data.session);
+    const [data, methods] = await Promise.all([
+      api.get('/api/profile'),
+      api.get('/api/auth/identities')
+    ]);
+    const oauthResult = new URLSearchParams(window.location.search).get('oauth');
+    if (oauthResult === 'linked') toast({ type: 'success', title: 'Google berhasil ditautkan' });
+    if (oauthResult === 'conflict') toast({ type: 'error', title: 'Google sudah terhubung ke akun lain' });
+    if (oauthResult === 'link-session') toast({ type: 'warning', title: 'Sesi akun berubah', message: 'Mulai ulang penautan dari profil akun yang sama.' });
+    if (oauthResult === 'link-failed') toast({ type: 'error', title: 'Penautan Google gagal', message: 'Coba lagi dari Profil.' });
+    render(data.profile, data.session, methods.loginMethods);
   } catch (err) {
     area.replaceChildren(Alert({ tone: 'danger', title: 'Gagal memuat profil', children: err instanceof ApiError ? err.message : 'Coba muat ulang.' }));
   }

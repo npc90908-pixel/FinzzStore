@@ -1,17 +1,17 @@
 // ============================================================================
-// GOOGLE OAUTH 2.0 — server-side authorization-code exchange.
+// GOOGLE OIDC — server-side authorization-code flow.
 //
-// The browser only ever sees a normal 302 redirect; tokens are exchanged and
-// kept on the server. Every outbound call has a hard timeout and a bounded
-// payload so a stalling Google endpoint can never pin a serverless instance.
-// When OAuth is not configured nothing here is reachable: the routes return
-// 404 and the login button is not rendered.
+// Uses the existing FINZZ session system. State + PKCE + nonce are one-time
+// HttpOnly cookies; the ID token signature and OIDC claims (iss, aud, exp, iat,
+// nonce, sub, verified email) are checked before an identity is used. Provider
+// tokens are never stored, returned to the browser, or logged.
 // ============================================================================
+import { createPublicKey, verify as verifySignature, timingSafeEqual } from 'node:crypto';
 import { AppError } from './errors.js';
 
 const AUTHORIZE_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-const USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1/userinfo';
+const JWKS_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/certs';
 const SCOPE = 'openid email profile';
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -22,34 +22,33 @@ async function readBoundedText(response) {
     await response.body?.cancel().catch(() => {});
     throw new AppError('OAUTH_PROVIDER_FAILED', 'Respons Google melebihi batas ukuran.', 502);
   }
+  if (!response.body) return '';
   const chunks = [];
   let total = 0;
-  if (response.body) {
-    const reader = response.body.getReader();
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const bytes = Buffer.from(value);
-        total += bytes.length;
-        if (total > MAX_RESPONSE_BYTES) {
-          await reader.cancel().catch(() => {});
-          throw new AppError('OAUTH_PROVIDER_FAILED', 'Respons Google melebihi batas ukuran.', 502);
-        }
-        chunks.push(bytes);
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const bytes = Buffer.from(value);
+      total += bytes.length;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new AppError('OAUTH_PROVIDER_FAILED', 'Respons Google melebihi batas ukuran.', 502);
       }
-    } finally {
-      reader.releaseLock();
+      chunks.push(bytes);
     }
+  } finally {
+    reader.releaseLock();
   }
   return Buffer.concat(chunks, total).toString('utf8');
 }
 
-async function fetchJson(url, options = {}) {
+async function fetchJson(fetchImpl, url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetchImpl(url, { ...options, redirect: 'error', signal: controller.signal });
     const text = await readBoundedText(response);
     let payload = null;
     try {
@@ -65,7 +64,10 @@ async function fetchJson(url, options = {}) {
         { providerStatus: response.status }
       );
     }
-    return payload || {};
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new AppError('OAUTH_PROVIDER_FAILED', 'Respons Google tidak valid.', 502);
+    }
+    return { payload, headers: response.headers };
   } catch (err) {
     if (err instanceof AppError) throw err;
     throw new AppError(
@@ -78,24 +80,124 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-export function createGoogleOAuth(config, { logger } = { logger: null }) {
+function decodeJwtPart(value) {
+  try {
+    return JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function timingSafeStringEqual(left, right) {
+  const a = Buffer.from(String(left || ''));
+  const b = Buffer.from(String(right || ''));
+  if (!a.length || a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+function cacheSeconds(headers) {
+  const header = String(headers.get('cache-control') || '');
+  const match = /(?:^|,)\s*max-age=(\d+)/i.exec(header);
+  return match ? Math.max(60, Math.min(86_400, Number(match[1]))) : 3600;
+}
+
+export function createGoogleOAuth(config, { logger, fetchImpl = globalThis.fetch, now = () => Date.now() } = {}) {
   const oauth = config.oauth;
+  let jwksCache = null;
+
+  async function getGoogleKeys() {
+    if (jwksCache && jwksCache.expiresAt > now()) return jwksCache.keys;
+    const { payload, headers } = await fetchJson(fetchImpl, JWKS_ENDPOINT, {
+      headers: { Accept: 'application/json' }
+    });
+    if (!Array.isArray(payload.keys) || payload.keys.length === 0) {
+      throw new AppError('OAUTH_PROVIDER_FAILED', 'Kunci verifikasi Google tidak valid.', 502);
+    }
+    jwksCache = { keys: payload.keys, expiresAt: now() + cacheSeconds(headers) * 1000 };
+    return jwksCache.keys;
+  }
+
+  async function verifyIdToken(idToken, expectedNonce) {
+    if (typeof idToken !== 'string' || idToken.length > 20_000 || !expectedNonce) {
+      throw new AppError('OAUTH_PROFILE_INVALID', 'Respons login Google tidak lengkap.', 502);
+    }
+    const parts = idToken.split('.');
+    if (parts.length !== 3) throw new AppError('OAUTH_PROFILE_INVALID', 'ID token Google tidak valid.', 502);
+    const header = decodeJwtPart(parts[0]);
+    const claims = decodeJwtPart(parts[1]);
+    if (!header || !claims || header.alg !== 'RS256' || typeof header.kid !== 'string') {
+      throw new AppError('OAUTH_PROFILE_INVALID', 'ID token Google tidak valid.', 502);
+    }
+
+    const keys = await getGoogleKeys();
+    const jwk = keys.find((candidate) => candidate?.kid === header.kid && candidate?.kty === 'RSA');
+    if (!jwk) throw new AppError('OAUTH_PROVIDER_FAILED', 'Kunci tanda tangan Google tidak ditemukan.', 502);
+
+    let validSignature = false;
+    try {
+      const publicKey = createPublicKey({ key: { kty: jwk.kty, n: jwk.n, e: jwk.e }, format: 'jwk' });
+      validSignature = verifySignature(
+        'RSA-SHA256',
+        Buffer.from(`${parts[0]}.${parts[1]}`),
+        publicKey,
+        Buffer.from(parts[2], 'base64url')
+      );
+    } catch {
+      validSignature = false;
+    }
+    if (!validSignature) throw new AppError('OAUTH_PROFILE_INVALID', 'Tanda tangan ID token Google tidak valid.', 401);
+
+    const currentSeconds = Math.floor(now() / 1000);
+    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+    const issuerValid = claims.iss === 'https://accounts.google.com' || claims.iss === 'accounts.google.com';
+    const audienceValid = audiences.includes(oauth.clientId)
+      && (!claims.azp || claims.azp === oauth.clientId)
+      && (audiences.length <= 1 || claims.azp === oauth.clientId);
+    const timeValid = Number.isFinite(Number(claims.exp))
+      && Number(claims.exp) > currentSeconds
+      && Number.isFinite(Number(claims.iat))
+      && Number(claims.iat) <= currentSeconds + 60;
+    const nonceValid = timingSafeStringEqual(claims.nonce, expectedNonce);
+    const email = String(claims.email || '').trim().toLowerCase();
+    const verifiedEmail = claims.email_verified === true || claims.email_verified === 'true';
+    const subject = String(claims.sub || '').trim();
+
+    if (!issuerValid || !audienceValid || !timeValid || !nonceValid) {
+      logger?.warn?.('google oidc claims rejected', {
+        issuerValid, audienceValid, timeValid, nonceValid
+      });
+      throw new AppError('OAUTH_PROFILE_INVALID', 'Klaim login Google tidak valid atau sudah kedaluwarsa.', 401);
+    }
+    if (!subject || subject.length > 255 || !email || email.length > 254 || !verifiedEmail) {
+      logger?.warn?.('google oidc verified identity missing', { hasSubject: Boolean(subject), hasEmail: Boolean(email), verifiedEmail });
+      throw new AppError('OAUTH_EMAIL_UNVERIFIED', 'Email Google belum terverifikasi. Gunakan cara masuk lain.', 401);
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      throw new AppError('OAUTH_PROFILE_INVALID', 'Alamat email Google tidak valid.', 401);
+    }
+
+    return {
+      provider: 'google',
+      providerSubject: subject,
+      email,
+      name: String(claims.name || '').slice(0, 80) || null
+    };
+  }
 
   return {
     get available() {
       return Boolean(oauth.available);
     },
 
-    /** URL halaman consent Google. `state` melindungi dari CSRF lewat cookie. */
-    authorizeUrl({ state, codeChallenge }) {
+    /** URL consent. Nonce is bound to the one-time state cookies by the route. */
+    authorizeUrl({ state, codeChallenge, nonce }) {
       const params = new URLSearchParams({
         client_id: oauth.clientId,
         redirect_uri: oauth.redirectUri,
         response_type: 'code',
         scope: SCOPE,
         state,
-        // Fresh account picker every time: shared devices never silently reuse
-        // whichever Google profile was logged in before.
+        nonce,
         prompt: 'select_account',
         access_type: 'online',
         include_granted_scopes: 'true',
@@ -105,9 +207,9 @@ export function createGoogleOAuth(config, { logger } = { logger: null }) {
       return `${AUTHORIZE_ENDPOINT}?${params.toString()}`;
     },
 
-    /** Tukar code dengan access token, lalu ambil profil terverifikasi. */
-    async authenticate(code, codeVerifier) {
-      const tokenPayload = await fetchJson(TOKEN_ENDPOINT, {
+    /** Exchange an authorization code and validate the signed OIDC ID token. */
+    async authenticate(code, codeVerifier, nonce) {
+      const { payload } = await fetchJson(fetchImpl, TOKEN_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
         body: new URLSearchParams({
@@ -119,34 +221,10 @@ export function createGoogleOAuth(config, { logger } = { logger: null }) {
           code_verifier: String(codeVerifier || '')
         }).toString()
       });
-
-      const accessToken = tokenPayload.access_token;
-      if (!accessToken) {
-        throw new AppError('OAUTH_PROVIDER_FAILED', 'Respons Google tidak berisi token akses.', 502);
+      if (!payload.id_token) {
+        throw new AppError('OAUTH_PROVIDER_FAILED', 'Respons Google tidak berisi ID token.', 502);
       }
-
-      const profile = await fetchJson(USERINFO_ENDPOINT, {
-        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' }
-      });
-
-      const email = String(profile.email || '').trim().toLowerCase();
-      // Google guarantees email_verified for hosted/Gmail accounts; treat an
-      // unverified assertion as a hard failure instead of provisioning a ghost
-      // account on an address nobody proved they own.
-      const providerSubject = String(profile.sub || '').trim();
-      if (!email || profile.email_verified !== true) {
-        logger?.warn?.('google oauth: unverified or missing email claim', { hasEmail: Boolean(email) });
-        throw new AppError('OAUTH_EMAIL_UNVERIFIED', 'Email Google belum terverifikasi. Gunakan cara masuk lain.', 401);
-      }
-      if (!providerSubject) {
-        throw new AppError('OAUTH_PROFILE_INVALID', 'Profil login Google tidak lengkap.', 502);
-      }
-
-      return {
-        provider: 'google',
-        email,
-        name: String(profile.name || '').slice(0, 80) || null
-      };
+      return verifyIdToken(payload.id_token, nonce);
     }
   };
 }

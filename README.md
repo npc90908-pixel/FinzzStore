@@ -11,14 +11,14 @@ prepaid wallet, manual deposits, order management and an admin dashboard.
   terverifikasi) dengan RLS dan RPC atomik. **Supabase Auth sudah dihapus.**
 - **Auth**: kustom — Argon2id, kode OTP 6 digit lewat SMTP, link reset 32 byte
   sekali pakai (10 menit), sesi cookie HttpOnly + hash di database, CSRF.
-- **Payments**: manual deposit approval today; the gateway adapter exists but is
-  deliberately inactive.
-- **Supplier**: TELEKOS.ID adapter (live, server-side only) plus a mock fixture
-  that is impossible to enable in production.
+- **Payments**: manual deposit approval only. AstraPay is not wired without a
+  verified status/detail/list and raw-body webhook-signature contract.
+- **Supplier**: TELEKOS.ID server-side adapter (live only when configured) plus
+  a mock fixture that is impossible to enable in production.
 
 ---
 
-> **Status 26 Oktober 2026.** Supabase Auth dihapus total; autentikasi kini
+> **Status 27 Oktober 2026.** Supabase Auth dihapus total; autentikasi kini
 > dijalankan sendiri di atas PostgreSQL (Argon2id + OTP email). Panduan migrasi
 > ada di `ENV-VERCEL.md` §7 dan ringkasan perubahan di `LAPORAN-MIGRASI-AUTH.md`.
 > Versi README sebelum migrasi disimpan di `docs/removed/README-supabase-era.md`.
@@ -120,10 +120,11 @@ Then verify:
 DATABASE_URL=postgres://... npm run db:verify
 ```
 
-The verifier checks: the 9 required tables, RLS enabled on every user table, a
-policy on each user table, all 24 RPCs present with `SECURITY DEFINER`, no
-`EXECUTE` grant to `anon`/`authenticated`/`public`, the 7 settings rows, and that
-at least one admin exists.
+The verifier checks the required application tables (including the private
+`oauth_identities` table), RLS and user-table policies, all required RPCs with
+`SECURITY DEFINER`, no untrusted `EXECUTE` grants, the 7 settings rows, and
+whether an admin exists. Apply all files in `database/migrations/` before
+running it.
 
 ### 3.2 First admin
 
@@ -158,7 +159,10 @@ OAuth bersifat opsional: fitur hidup hanya setelah seluruh pasangan kredensialny
 terisi, dan UI menyembunyikan integrasi yang belum dikonfigurasi.
 
 Lihat `.env.example` untuk variabel penting dan `src/config.js` untuk default
-serta validasi konfigurasi yang berlaku.
+serta validasi konfigurasi yang berlaku. Belum ada variabel AstraPay khusus.
+`PAYMENT_PROVIDER`, `PAYMENT_MODE`, dan `PAYMENT_SECRET` adalah placeholder
+generik lama di konfigurasi; adapter tetap dikunci `enabled=false` dan nilai
+tersebut tidak mengaktifkan, memanggil, atau memverifikasi AstraPay.
 
 ### 3.4 Process manager and tunnel
 
@@ -198,15 +202,31 @@ Register, login, logout, email verification + resend (rate limited), forgot /
 reset password, change password, session refresh, expiry detection
 (`401 SESSION_EXPIRED` vs `401 UNAUTHORIZED`), logout-all. Safe internal return
 URLs only (`safeReturnPath`) — no open redirect. Local auth (Argon2id + OTP) in production; the
-dev provider only exists in demo mode.
+dev provider only exists in demo mode. Google OIDC remains on this same session
+system: sign-in is keyed by Google `sub`; an email collision requires the user to
+sign in and explicitly link from Profile. Link/unlink requires verified Google
+email, state + nonce + PKCE, a session-bound callback, audit entries, and a
+remaining login method. Migration `009_oauth_linking.sql` adds the private
+identity table and `password_auth_enabled`; new Google-only accounts can set a
+local password via the existing email reset flow before unlinking Google.
+**Legacy-account caveat:** Google users created before provider-subject storage
+have no saved Google `sub`; they are never auto-merged or silently linked by
+email. They may need to reset their password through the verified email, sign
+in to that same FINZZ account, and then explicitly link Google from Profile.
+Do not unlink an identity unless an alternate login method is active.
 
 ### Catalogue & ordering
-Catalogue sync job pulls servers → apps → countries → prices, stores integer
-IDR prices with markup (`pricing_policy`), and deactivates rows that disappeared
-per supplier **server** (a per-app sync would wipe sibling apps). Orders quote
-the supplier first, then `rpc_create_order` debits the wallet, creates the order
-and stores the idempotency key in one transaction; the purchase then goes to the
-supplier with `Idempotency-Key = internal order id`.
+Guest browsing and checkout use dynamic supplier reads: `GET /servers`,
+`GET /apps?server=...`, `GET /countries?server=...&app=...`, and
+`GET /prices?server=...&app=...&country=...&refresh=...`. Per-process cache
+status and timestamps are surfaced honestly, refresh/retries are bounded, and
+selected offers are revalidated before any wallet debit. Guests can browse and
+quote; order creation requires an account and returns to the validated purchase
+context after login. The catalogue sync job also mirrors discovered services
+for summaries/admin views and deactivates rows that disappeared per supplier
+**server**. Orders then call `rpc_create_order`, which debits the wallet, creates
+the order and stores its idempotency key in one transaction; the purchase goes
+to the supplier with `Idempotency-Key = internal order id`.
 
 - definitive supplier error → `rpc_fail_order` refunds once, order `failed`;
 - timeout / 5xx / maintenance → order stays `pending`, **no refund**, retried by
@@ -228,7 +248,13 @@ Manual only. Proof uploads are validated by magic bytes, size-limited, renamed
 with a UUID and written outside the web root (`UPLOAD_DIR`, mode 0600). Only an
 admin can read a proof (`/api/admin/deposits/:id/proof`). Approval credits the
 wallet exactly once (`409 DEPOSIT_ALREADY_REVIEWED` afterwards), rejection needs
-a reason, and both are audited.
+a reason, and both are audited. The existing schema is a manual-review flow:
+`deposits.amount` is the requested amount, `approved_amount` is the amount actually
+credited (bounded by the request), and `unique_code` is currently unused by the
+manual-create RPC. `wallet_transactions` records the credit under a unique
+deposit reference. There is no provider invoice ID, payable amount, gateway fee,
+payment URL/QR payload, provider status/event inbox, or provider reconciliation
+state; the generic `method='gateway'` enum value is not an AstraPay integration.
 
 ### Admin
 Dashboard (real totals from completed orders, wallet liability, pending
@@ -253,8 +279,8 @@ HTML shell (per-request CSP nonce, JSON boot state, no `.html` files anywhere):
 Dark mode first, CSS variables, mobile-first layout with a slide-over sidebar and
 a bottom nav, `prefers-reduced-motion` respected, skeleton loading states,
 explicit "data unavailable" states, and no invented statistics: the landing page
-only shows numbers that come from the live catalogue or marks the data as
-unavailable.
+labels its PostgreSQL catalogue mirror and last sync timestamp; `/services` uses
+dynamic discovery, and checkout performs a fresh server-side offer check.
 
 Orders poll the BFF every 4 s **only while the tab is visible**, ask the server
 to sync the supplier at a slower cadence (3 s server-side throttle), and stop
@@ -267,16 +293,24 @@ entirely when the order is terminal or the tab is hidden.
 ```
 GET    /api/health
 GET    /api/public/{config,catalog,summary,quote}
+GET    /api/public/catalog/servers
+GET    /api/public/catalog/apps?server=...
+GET    /api/public/catalog/countries?server=...&app=...
+GET    /api/public/catalog/prices?server=...&app=...&country=...&refresh=...
 
 POST   /api/auth/{register,login,logout,forgot-password,reset-password,verify-email,resend-verification,change-password,logout-all}
 POST   /api/auth/refresh     (slides the session, rotates the CSRF token)
 GET    /api/auth/session
+GET    /api/auth/identities
+GET    /api/auth/google?next=... and /api/auth/google/callback
+POST   /api/auth/google/link (authenticated session-bound linking start)
+POST   /api/auth/google/unlink (requires an alternate login method)
 
 GET    /api/orders            ?page&per_page&status
 GET    /api/orders/active
 GET    /api/orders/:id
 GET    /api/orders/:id/events
-POST   /api/orders            { service_id, idempotency_key }
+POST   /api/orders            { service_id, idempotency_key } OR { server_id, app_id, country_id, offer_id, expected_price, idempotency_key }
 POST   /api/orders/:id/sync
 POST   /api/orders/:id/cancel
 
@@ -340,14 +374,19 @@ Refunds, deposit credits and debits are single-shot and idempotent.
 
 ```bash
 npm run check      # static gates (syntax, no .html, pure ESM, no framework, secrets)
-npm test           # 44 tests: unit (18) + API (23) + UI (3)
-npm run test:sql   # 30 table/RLS/RPC assertions against local PostgreSQL 17
+npm test           # unit + API + UI + resilience suite (121 cases at this checkout)
+npm run test:sql   # SQL/RLS/RPC suite (45 cases; requires configured local PostgreSQL)
 npm audit          # dependency audit
 ```
 
 Coverage highlights:
 
 - landing page renders without a session and ships no secrets;
+- guest catalogue discovery uses dynamic supplier reads, preserves provider IDs,
+  sorts sale prices numerically, reports cache freshness, and prevents stale/mock
+  data from being described as a live supplier confirmation;
+- Google OIDC verifies signature/state/nonce/PKCE, explicitly links by provider
+  subject, rejects email-based merges, and prevents unlinking the final login method;
 - register / duplicate email / weak password / login / wrong password / logout;
 - CSRF required for state-changing requests; expired session → `SESSION_EXPIRED`;
 - rate limiting on login;
@@ -415,12 +454,22 @@ runtime evidence and the deployment checklist.
   webhook signature verification, but it has only been tested against the mock
   fixture and the published API contract. Before selling, run a small real
   purchase with an owner-approved account and confirm the amounts.
-- **Payment gateway inactive.** `src/payment/adapter.js` defines
-  create/check/callback/expiration with signature + idempotency, but no provider
-  is configured; deposits are manual and the UI states this clearly.
-- **Catalogue sync breadth.** The sync intentionally limits itself (10 apps × 12
-  countries per server by default) to respect supplier rate limits; tune
-  `sync({ maxApps, maxCountriesPerApp })` for a larger catalogue.
+- **AstraPay gateway not implemented.** Deposits remain manual; there is no
+  AstraPay invoice, QRIS/payment-link flow, automatic-payment history, or
+  reconciliation UI. The repository contains no usable AstraPay contract for
+  exact status/detail/list paths, response schemas, webhook signature
+  header/encoding/canonical input, payable-amount/fee semantics, or replay
+  behavior. These must be confirmed before adding invoice fields or any
+  provider-driven wallet-credit path. No AstraPay-specific credentials or
+  endpoints are wired. Generic `PAYMENT_*` config placeholders do not activate
+  the adapter, which remains hard-disabled.
+- **Catalogue mirror freshness.** The home-page summary uses the PostgreSQL
+  mirror, refreshed by the catalogue job every 30 minutes, so its counts and
+  prices can lag a supplier change; the UI identifies the mirror and last sync
+  time. `/services` reads every valid row returned from the documented dynamic
+  supplier routes with bounded cache/retries/refresh, and checkout revalidates.
+  Live supplier behavior still needs owner-approved credential verification
+  before production sales are enabled.
 - **Verify email delivery** depends on the `SMTP_*` settings (the API reports
   `emailSent:false` instead of pretending when mail is not configured); in demo mode
   the dev provider returns a reset link in the response for local testing only.

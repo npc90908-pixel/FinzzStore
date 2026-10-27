@@ -149,7 +149,7 @@ export default async function landing(ctx) {
   main.appendChild(hero);
 
   // ---------------------------------------------------------- logo marquee
-  // Rendered from the live catalogue: the strip only ever shows apps that can
+  // Rendered from the database catalogue mirror: the strip only ever shows apps that can
   // actually be bought. Until data arrives the section stays hidden (no layout
   // shift, no invented logos).
   const marqueeSection = el('section', {
@@ -354,11 +354,15 @@ export default async function landing(ctx) {
         el('div', { class: 'pill-row' },
           el('span', { class: 'badge badge--brand' }, icon('layers', { size: 13 }), el('span', { text: `${formatNumber(catalog.services.length)} layanan aktif` })),
           el('span', { class: 'badge badge--neutral' }, icon('globe', { size: 13 }), el('span', { text: `${formatNumber(catalog.countries.length)} negara` })),
-          catalog.source === 'mock' ? el('span', { class: 'badge badge--warning' }, el('span', { text: 'Data demo (mock supplier)' })) : null
+          catalog.source === 'mock'
+            ? el('span', { class: 'badge badge--warning' }, el('span', { text: 'Data demo (mock supplier)' }))
+            : catalog.source === 'supplier'
+              ? el('span', { class: 'badge badge--neutral' }, el('span', { text: 'Database mirror supplier' }))
+              : null
         ),
         catalog.syncedAt
-          ? el('span', { class: 'text-xs text-dim', text: `Harga diperbarui ${formatDate(catalog.syncedAt)}` })
-          : el('span', { class: 'text-xs text-dim', text: 'Waktu pembaruan harga belum tersedia' })
+          ? el('span', { class: 'text-xs text-dim', text: `Mirror katalog terakhir disinkronkan ${formatDate(catalog.syncedAt)}` })
+          : el('span', { class: 'text-xs text-dim', text: 'Waktu sinkronisasi mirror katalog belum tersedia' })
       )
     );
 
@@ -405,7 +409,7 @@ export default async function landing(ctx) {
       )
     );
 
-    // cheapest live rows
+    // cheapest rows from the latest available database mirror
     const cheapest = [...catalog.services].sort((a, b) => a.price - b.price).slice(0, 6);
     body.appendChild(
       el('div', { class: 'table-wrap', style: { marginTop: '20px' } },
@@ -425,7 +429,7 @@ export default async function landing(ctx) {
     );
     body.appendChild(
       el('p', { class: 'text-xs text-dim', style: { marginTop: '10px' },
-        text: 'Tabel menampilkan 6 layanan termurah saat ini. Daftar lengkap tersedia setelah Anda masuk ke dashboard.' })
+        text: 'Tabel menampilkan 6 layanan termurah dari snapshot mirror terakhir. Jelajahi katalog lengkap di halaman Beli Nomor; harga akan diperiksa ulang sebelum checkout.' })
     );
   };
 

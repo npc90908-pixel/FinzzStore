@@ -227,30 +227,33 @@ export function createOrderService({ db, supplier, settings, catalog, logger, co
    * Place an order. Idempotent: the client must send a stable key.
    * Returns { order, balance, replayed, notice }.
    */
-  async function create({ user, serviceId, idempotencyKey, ip = null, userAgent = null }) {
+  async function create({ user, serviceId = null, offer = null, expectedPrice = null, idempotencyKey, ip = null, userAgent = null }) {
     const ops = await operations();
     assertSalesOpen(ops);
     requireSupplier();
 
-    const service = await db.services.get(serviceId);
-    if (!service || !service.is_active) throw errors.notFound('Layanan');
+    const service = serviceId ? await db.services.get(serviceId) : null;
+    if (serviceId && (!service || !service.is_active)) throw errors.notFound('Layanan');
+    if (!serviceId && !offer) throw new AppError('INVALID_OFFER', 'Konteks penawaran tidak valid.', 422);
 
     // Prices are always recomputed server-side; the client never sends money.
-    const quote = await catalog.quote({ serviceId: service.id });
+    // Dynamic offers are refreshed from the documented TeleKos /prices route.
+    const quote = offer
+      ? await catalog.quoteOffer(offer)
+      : await catalog.quote({ serviceId: service.id, refresh: true });
     if (!quote.live) {
       // Mock/offline pricing is fine for the demo, but a live deployment must
       // never charge a stale price when the supplier cannot confirm stock.
       if (!supplier.isMock && !config.demoMode) {
-        throw new AppError({
-          code: 'QUOTE_UNAVAILABLE',
-          status: 503,
-          expose: true,
-          message: 'Harga tidak dapat diverifikasi saat ini. Coba lagi sebentar.'
-        });
+        throw new AppError(
+          'QUOTE_UNAVAILABLE',
+          'Harga tidak dapat diverifikasi saat ini. Coba lagi sebentar.',
+          503
+        );
       }
     }
     if (!quote.offerId && !supplier.isMock) {
-      throw new AppError({ code: 'OFFER_UNAVAILABLE', status: 503, expose: true, message: 'Nomor sedang tidak tersedia.' });
+      throw new AppError('OFFER_UNAVAILABLE', 'Nomor sedang tidak tersedia.', 503);
     }
 
     // The quote is the authoritative snapshot: it was produced server-side by
@@ -262,27 +265,34 @@ export function createOrderService({ db, supplier, settings, catalog, logger, co
     const taxAmount = fromDbAmount(quote.price?.taxAmount ?? 0);
     const totalPrice = fromDbAmount(quote.price?.totalPrice ?? supplierPrice + markupAmount + taxAmount);
     if (totalPrice !== supplierPrice + markupAmount + taxAmount || totalPrice <= 0) {
-      throw new AppError({
-        code: 'PRICE_MISMATCH',
-        status: 503,
-        expose: true,
-        message: 'Harga tidak konsisten. Silakan ulangi pemesanan.'
-      });
+      throw new AppError(
+        'PRICE_MISMATCH',
+        'Harga tidak konsisten. Silakan ulangi pemesanan.',
+        503
+      );
+    }
+    if (expectedPrice !== null && totalPrice !== expectedPrice) {
+      throw new AppError('PRICE_CHANGED', 'Harga berubah sejak penawaran ditampilkan. Muat ulang harga dan tinjau sebelum membeli.', 409);
     }
 
     const requestHash = requestHashFor({
-      serviceId: service.id,
+      serviceId: service?.id || null,
+      offer: offer ? {
+        server: offer.server,
+        app: offer.app,
+        country: offer.country,
+        offerId: offer.offerId
+      } : null,
       supplierPrice,
       markupAmount,
       taxAmount,
       totalPrice,
-      offerId: quote.offerId || null,
-      minPrice: Math.floor(totalPrice * 0.9)
+      offerId: quote.offerId || null
     });
 
     const created = await db.orders.create({
       userId: user.id,
-      serviceId: service.id,
+      serviceId: service?.id || null,
       idempotencyKey,
       requestHash,
       supplierPrice,
@@ -290,12 +300,12 @@ export function createOrderService({ db, supplier, settings, catalog, logger, co
       taxAmount,
       totalPrice,
       provider: supplier.mode,
-      providerServer: quote.server || service.provider_server || null,
-      providerAppId: service.provider_app_id,
-      providerAppName: service.app_name || service.provider_app_name || service.provider_app_id,
-      countryId: service.country_id,
-      countryName: service.country_name,
-      countryIso: service.country_iso || null,
+      providerServer: quote.server || service?.provider_server || null,
+      providerAppId: quote.appId || service?.provider_app_id,
+      providerAppName: quote.appName || service?.app_name || service?.provider_app_name || service?.provider_app_id,
+      countryId: quote.countryId ?? service?.country_id,
+      countryName: quote.countryName || service?.country_name,
+      countryIso: quote.countryIso || service?.country_iso || null,
       providerOfferId: quote.offerId || null,
       maxActiveOrders: Number(ops.max_active_orders ?? 5),
       actor: { ip, userAgent }

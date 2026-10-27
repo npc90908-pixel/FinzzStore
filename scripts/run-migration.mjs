@@ -9,8 +9,8 @@
 //   DATABASE_URL=... node scripts/run-migration.mjs --baseline    # tandai sudah ada (tanpa mengeksekusi)
 //
 // Kenapa satu perintah, bukan dua:
-//   Skema FINZZ punya DUA lapis — skema dasar (tabel, RLS, 28 RPC) dan migrasi
-//   001–005 di atasnya. Menjalankan migrasi di database kosong selalu gagal.
+//   Skema FINZZ punya DUA lapis — skema dasar (tabel, RLS, RPC) dan seluruh
+//   file migrasi bernomor di atasnya. Menjalankan migrasi di database kosong selalu gagal.
 //   Runner ini yang memutuskan: kalau skema dasar belum ada, ia berhenti dan
 //   menyuruh pakai --bootstrap, alih-alih meledak dengan error PL/pgSQL yang
 //   tidak bisa dibaca manusia.
@@ -161,7 +161,7 @@ try {
   if (!base.ready) {
     if (!withBootstrap) {
       console.error(
-        '\nSkema dasar (tabel + RLS + RPC) belum ada, jadi migrasi 001–005 tidak akan jalan.\n' +
+        '\nSkema dasar (tabel + RLS + RPC) belum ada, jadi migrasi tidak akan jalan.\n' +
         'Jalankan salah satu:\n' +
         '  npm run db:bootstrap     # terapkan database/BOOTSTRAP_SUPABASE.sql lalu migrasi\n' +
         '  npm run db:baseline      # kalau Anda yakin skemanya sudah dibuat manual'

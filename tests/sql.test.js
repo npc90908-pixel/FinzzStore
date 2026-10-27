@@ -58,7 +58,18 @@ test('schema, policies and functions apply cleanly and are re-runnable', async (
         where n.nspname = 'public' and p.proname like 'rpc_%')::int as rpc_functions
   `);
   assert.ok(rows[0].rls_tables >= 12, `expected >= 12 tables with RLS, got ${rows[0].rls_tables}`);
-  assert.ok(rows[0].rpc_functions >= 15, `expected >= 15 rpc functions, got ${rows[0].rpc_functions}`);
+  assert.ok(rows[0].rpc_functions >= 18, `expected >= 18 rpc functions, got ${rows[0].rpc_functions}`);
+  const { rows: oauth } = await db.query(`
+    select
+      to_regclass('public.oauth_identities') is not null as identity_table,
+      exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'profiles'
+                 and column_name = 'password_auth_enabled') as password_auth_flag,
+      (select relrowsecurity from pg_class where oid = 'public.oauth_identities'::regclass) as rls_enabled
+  `);
+  assert.equal(oauth[0].identity_table, true);
+  assert.equal(oauth[0].password_auth_flag, true);
+  assert.equal(oauth[0].rls_enabled, true);
 
   const { rows: settings } = await db.query('select count(*)::int as n from public.app_settings');
   assert.ok(settings[0].n >= 6, 'default settings inserted');
@@ -70,6 +81,45 @@ test('registration creates profile + wallet with role=user', async () => {
   assert.equal(rows[0].role, 'user');
   assert.equal(rows[0].status, 'active');
   assert.equal(await walletBalance(db, id), 0);
+});
+
+test('Google identity RPCs use provider subject, expose no email merge, and protect the last login method', async () => {
+  const subject = `google-${randomUUID()}`;
+  const googleEmail = `google-${randomUUID()}@finzz.test`;
+  const hash = `$argon2id$test-hash-${randomUUID()}`;
+  const { rows: createdRows } = await db.query(`
+    select public.rpc_create_google_account($1,$2,$3,$4,$1,$5,null,null) as result
+  `, [googleEmail, hash, `g${randomUUID().slice(0, 10)}`, subject, 'Verified Google']);
+  const created = createdRows[0].result;
+  assert.equal(created.created, true);
+  const userId = created.profile.id;
+  const { rows: flags } = await db.query(
+    'select email_verified_at, password_auth_enabled from public.profiles where id = $1', [userId]
+  );
+  assert.ok(flags[0].email_verified_at);
+  assert.equal(flags[0].password_auth_enabled, false);
+
+  const { rows: denied } = await db.query('select public.rpc_unlink_google_identity($1) as result', [userId]);
+  assert.equal(denied[0].result.reason, 'LAST_LOGIN_METHOD');
+
+  const otherUser = await createUser(db, `other-${randomUUID()}@finzz.test`);
+  const { rows: conflictRows } = await db.query(`
+    select public.rpc_link_google_identity($1,$2,$3,'Name',null,null) as result
+  `, [otherUser, subject, googleEmail]);
+  assert.equal(conflictRows[0].result.conflict, true, 'same Google subject cannot be attached to another FINZZ account');
+
+  await db.query('update public.profiles set password_hash = $2 where id = $1', [userId, `$argon2id$reset-${randomUUID()}`]);
+  const { rows: enabled } = await db.query('select password_auth_enabled from public.profiles where id = $1', [userId]);
+  assert.equal(enabled[0].password_auth_enabled, true, 'changing the local password activates it as an alternate method');
+  const { rows: removed } = await db.query('select public.rpc_unlink_google_identity($1) as result', [userId]);
+  assert.equal(removed[0].result.unlinked, true);
+
+  const existingEmail = `existing-${randomUUID()}@finzz.test`;
+  await createUser(db, existingEmail);
+  const { rows: emailConflictRows } = await db.query(`
+    select public.rpc_create_google_account($1,$2,$3,$4,$1,'Name',null,null) as result
+  `, [existingEmail, hash, `g${randomUUID().slice(0, 10)}`, `google-${randomUUID()}`]);
+  assert.equal(emailConflictRows[0].result.emailConflict, true);
 });
 
 // ---------------------------------------------------------------------------

@@ -57,10 +57,37 @@ const adminDashboard = () => ({
 });
 
 function baseRoutes(extra = []) {
+  const fetchedAt = new Date().toISOString();
+  const cache = { source: 'mock', fetchedAt, ageSeconds: 0, fresh: true, stale: false, cacheHit: false, refreshRequested: false, refreshInProgress: false, lastError: null };
   return [
     { match: '/api/public/config', body: FIXTURES.config },
+    { match: '/api/public/catalog/servers', body: { servers: [{ id: 'server1', name: 'Server 1', available: true, maintenance: false }], cache } },
+    { match: '/api/public/catalog/apps', body: { serverId: 'server1', apps: [{ id: 'wa', name: 'WhatsApp' }, { id: 'tg', name: 'Telegram' }], cache } },
+    { match: '/api/public/catalog/countries', body: { serverId: 'server1', appId: 'wa', countries: [
+      { id: 6, name: 'Indonesia', iso: 'ID', callingCode: '+62', stock: 50 },
+      { id: 7, name: 'Malaysia', iso: 'MY', callingCode: '+60', stock: 0 }
+    ], cache } },
+    { match: '/api/public/catalog/prices', body: ({ path }) => {
+      const query = new URL(`http://localhost${path}`).searchParams;
+      const app = query.get('app');
+      const country = Number(query.get('country'));
+      const offers = app === 'tg'
+        ? [{ id: 'tg-low', offerId: 'offer-tg-low', salePrice: 900, currency: 'IDR', stock: 50 }]
+        : country === 7
+          ? [{ id: 'wa-empty', offerId: 'offer-wa-empty', salePrice: 1200, currency: 'IDR', stock: 0 }]
+          : [
+              { id: 'wa-high', offerId: 'offer-wa-high', salePrice: 2500, currency: 'IDR', stock: 100 },
+              { id: 'wa-low', offerId: 'offer-wa-low', salePrice: 1000, currency: 'IDR', stock: 20 }
+            ];
+      return {
+        server: { id: 'server1', name: 'Server 1', available: true, maintenance: false },
+        app: { id: app || 'wa', name: app === 'tg' ? 'Telegram' : 'WhatsApp' },
+        country: { id: country || 6, name: country === 7 ? 'Malaysia' : 'Indonesia', iso: country === 7 ? 'MY' : 'ID', callingCode: country === 7 ? '+60' : '+62', stock: country === 7 ? 0 : 50 },
+        offers, quotedAt: fetchedAt, cache
+      };
+    } },
     { match: '/api/public/catalog', body: catalogFixture() },
-    { match: '/api/public/quote', body: { supplierPrice: 2200, markupBps: 1500, price: { supplierPrice: 2200, markupAmount: 330, taxAmount: 0, totalPrice: 2530 }, stock: 4820, quotedAt: new Date().toISOString(), live: true, server: 'server1' } },
+    { match: '/api/public/quote', body: { price: 2530, stock: 4820, quotedAt: new Date().toISOString(), live: false, source: 'mock', cache: { source: 'mock', fresh: true, stale: false, fetchedAt, ageSeconds: 0 }, server: 'server1' } },
     {
       match: '/api/health',
       body: {
@@ -99,6 +126,7 @@ function baseRoutes(extra = []) {
     { match: /^\/api\/orders\/[^/?]+$/, body: { order: { ...FIXTURES.order } } },
     { match: '/api/orders', body: { orders: [{ ...FIXTURES.order }], pagination: { page: 1, perPage: 12, total: 1, pages: 1 } } },
     { match: '/api/deposits', body: { deposits: [], pagination: { page: 1, perPage: 10, total: 0, pages: 1 } } },
+    { match: '/api/auth/identities', body: { loginMethods: { passwordEnabled: true, identities: [] } } },
     {
       match: '/api/profile',
       body: {
@@ -237,7 +265,9 @@ test('page modules render against a DOM with fixtures', async () => {
       assert.match(html, /FINZZ/i);
       assert.ok(!/%\s*uptime/i.test(html), 'no invented uptime claim');
       assert.ok(!/99[,.]\d\s*%/.test(html), 'no invented success-rate claim');
-      assert.match(html, /WA|WhatsApp/, 'live catalogue is rendered');
+      assert.match(html, /WA|WhatsApp/, 'database-mirrored catalogue is rendered');
+      assert.match(html, /Data demo \(mock supplier\)/, 'demo source is identified on the mirror view');
+      assert.match(html, /Mirror katalog terakhir disinkronkan/, 'the landing page labels the database mirror timestamp accurately');
       const marquee = rendered.node.querySelector('.brand-marquee');
       assert.ok(marquee && !marquee.hasAttribute('hidden'), 'a real one-app catalogue still gets a scrolling brand strip');
       const track = marquee.querySelector('.brand-marquee__track');
@@ -265,6 +295,11 @@ test('page modules render against a DOM with fixtures', async () => {
     {
       const ctx = makeCtx({ api, pathname: '/services' });
       const rendered = await (await page('services'))(ctx);
+      await settle();
+      const countryButton = [...rendered.node.querySelectorAll('.country-chip')].find((button) => /Indonesia/.test(button.textContent));
+      assert.ok(countryButton, 'dynamic server/app/country data has loaded');
+      countryButton.dispatchEvent(new Event('click'));
+      await settle();
       const html = rendered.node.outerHTML;
       assert.match(html, /Beli nomor virtual/);
       assert.match(html, /WhatsApp/);
@@ -356,6 +391,8 @@ test('page modules render against a DOM with fixtures', async () => {
       const rendered = await (await page('profile'))(ctx);
       const html = rendered.node.outerHTML;
       assert.match(html, /Profil &amp; keamanan|Profil & keamanan/);
+      assert.match(html, /Metode masuk/);
+      assert.match(html, /Password akun/);
       assert.match(html, /user@finzz.test/);
       rendered.cleanup?.();
     }
@@ -494,6 +531,28 @@ test('new marketing pages render their content and the help search filters', asy
   }
 });
 
+test('client router allows guests to browse services while private routes stay protected', async () => {
+  const { window } = setupDom({ pathname: '/services', bootState: {
+    page: 'services', path: '/services', status: 200, user: null,
+    config: { csrfCookieName: 'fz_csrf' }, csrfToken: 'csrf-token', preloaded: {}
+  } });
+  const fetcher = installFetch(baseRoutes());
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+  try {
+    await import(`../public/js/main.js?guest-services-${Date.now()}`);
+    await settle();
+    const root = window.document.getElementById('app-root');
+    assert.match(root.outerHTML, /Beli nomor virtual/);
+    assert.ok(root.querySelector('.country-chip'), 'guest can browse dynamic catalog data');
+    assert.equal(window.location.assigned, undefined, 'guest is not redirected to login merely for browsing');
+    window.history.pushState({}, '', '/');
+    window.dispatchEvent(new window.Event('popstate'));
+    await settle();
+  } finally {
+    fetcher.restore();
+  }
+});
+
 test('main.js boots, routes and mounts a page from the server state', async () => {
   const { window } = setupDom({
     pathname: '/dashboard',
@@ -533,36 +592,16 @@ test('main.js boots, routes and mounts a page from the server state', async () =
   }
 });
 
-test('catalogue filter bar searches, hides empty stock and states its sort', async () => {
+test('dynamic catalogue UI preserves supplier context, sorts prices numerically, and returns guests to purchase context', async () => {
   const { window } = setupDom();
-  const now = new Date().toISOString();
-  const svc = (o) => ({
-    id: o.id, code: `tk-server1-${o.id}`, name: `${o.appName} ${o.countryName}`,
-    appId: o.appId, appName: o.appName, countryId: o.countryId, countryName: o.countryName,
-    countryIso: o.iso, callingCode: o.callingCode, price: o.price, stock: o.stock,
-    active: true, syncedAt: now
-  });
-  const waId = svc({ id: 'wa-id', appId: 'wa', appName: 'WhatsApp', countryId: 6, countryName: 'Indonesia', iso: 'ID', callingCode: '+62', price: 2500, stock: 100 });
-  const waMy = svc({ id: 'wa-my', appId: 'wa', appName: 'WhatsApp', countryId: 7, countryName: 'Malaysia', iso: 'MY', callingCode: '+60', price: 1200, stock: 0 });
-  const tgId = svc({ id: 'tg-id', appId: 'tg', appName: 'Telegram', countryId: 6, countryName: 'Indonesia', iso: 'ID', callingCode: '+62', price: 900, stock: 50 });
-
-  // Replace only the catalogue route; every other fixture stays as-is.
-  const routes = baseRoutes();
-  routes[1] = {
-    match: '/api/public/catalog',
-    body: {
-      services: [waId, waMy, tgId],
-      apps: [
-        { id: 'wa', name: 'WhatsApp', countries: [waId, waMy], minPrice: 1200, totalStock: 100, countryCount: 2 },
-        { id: 'tg', name: 'Telegram', countries: [tgId], minPrice: 900, totalStock: 50, countryCount: 1 }
-      ],
-      countries: [{ id: 6, name: 'Indonesia', iso: 'ID', callingCode: '+62' }, { id: 7, name: 'Malaysia', iso: 'MY', callingCode: '+60' }],
-      syncedAt: now,
-      source: 'supplier',
-      summary: { activeServices: 3, countries: 2, apps: 2, lastCatalogSync: now }
-    }
-  };
-  const fetcher = installFetch(routes);
+  const { createApi, ApiError } = await import('../public/js/api.js');
+  const { createStore } = await import('../public/js/store.js');
+  const { createLayout } = await import('../public/js/layout.js');
+  globalThis.__finzzStore = { createStore };
+  globalThis.__finzzApiError = ApiError;
+  globalThis.__finzzLayout = (store, navigate) =>
+    createLayout({ store, navigate, getTheme: () => 'dark', onToggleTheme: () => {}, onLogout: async () => {} });
+  const fetcher = installFetch(baseRoutes());
   const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
   try {
@@ -573,53 +612,105 @@ test('catalogue filter bar searches, hides empty stock and states its sort', asy
     await settle();
     const root = rendered.node;
 
-    assert.ok(!/Gagal memuat katalog/.test(root.outerHTML), 'the catalogue rendered instead of its error state');
-
-    // 1. The filter bar exposes all five controls.
+    assert.ok(!/Katalog TeleKos tidak tersedia/.test(root.outerHTML), 'dynamic catalogue data rendered');
     const bar = root.querySelector('.filter-bar');
     assert.ok(bar, 'filter bar is mounted');
-    assert.match(bar.outerHTML, /Cari aplikasi atau negara/, 'search input');
-    assert.match(bar.outerHTML, /Semua negara/, 'country select');
-    assert.match(bar.outerHTML, /Semua harga/, 'price select');
-    assert.match(bar.outerHTML, /Termurah/, 'sort select');
-    assert.match(bar.outerHTML, /Hanya yang ada stok/, 'availability toggle');
-    assert.ok(!/Reset filter/.test(bar.outerHTML), 'reset is hidden while no filter is active');
+    assert.match(bar.outerHTML, /Pilih server/);
+    assert.match(bar.outerHTML, /Pilih aplikasi/);
+    assert.match(bar.outerHTML, /Cari negara, ISO, atau kode telepon/);
+    assert.match(bar.outerHTML, /Urutkan penawaran/);
+    assert.match(bar.outerHTML, /Hanya tampilkan stok tersedia/);
+    assert.match(root.outerHTML, /WhatsApp · pilih negara/);
 
-    // 2. Unfiltered view = the active app's countries, sorted cheapest first.
-    assert.match(root.outerHTML, /WhatsApp — pilih negara/, 'the active app tab drives the list');
-    assert.match(root.outerHTML, /Menampilkan 1 dari 1 · diurutkan termurah/, 'counts and sort are stated');
-    assert.match(root.outerHTML, /Harga \d/, 'the catalogue sync timestamp is shown');
-
-    // 3. Zero-stock countries are filtered out by default (no phantom offers).
-    //    Malaysia may legitimately appear inside the country <select>, but it
-    //    must not appear as a buyable row.
     const grid = () => root.querySelector('.country-grid')?.outerHTML || '';
-    assert.ok(!/Malaysia/.test(grid()), 'a zero-stock country is not offered as a row');
-    assert.match(grid(), /Indonesia/, 'the stocked country is offered');
+    assert.match(grid(), /Indonesia/, 'a stocked supplier country is shown');
+    assert.ok(!/Malaysia/.test(grid()), 'zero-stock countries are filtered by the default toggle');
 
-    // 4. Typing in the search box re-renders across apps.
-    const input = root.querySelector('input[type="search"]');
-    assert.ok(input, 'search input is queryable');
-    input.value = 'telegram';
-    input.dispatchEvent(new window.Event('input'));
+    const stockToggle = root.querySelector('input[type="checkbox"]');
+    stockToggle.checked = false;
+    stockToggle.dispatchEvent(new window.Event('change'));
     await settle();
-    const searched = root.outerHTML;
-    assert.ok(!/Gagal memuat/.test(searched), 'searching did not break the page');
-    assert.match(grid(), /Telegram · Indonesia/, 'search is labelled with app + country');
-    assert.ok(!/WhatsApp · Indonesia/.test(grid()), 'non-matching rows are dropped');
-    assert.match(searched, /1 layanan cocok/, 'the result count reflects the search');
+    assert.match(grid(), /Malaysia/, 'users may turn off the availability filter and see valid zero-stock data');
 
-    // 5. A search with no match shows the empty state, not a blank panel.
-    input.value = 'zzz-tidak-ada';
-    input.dispatchEvent(new window.Event('input'));
+    const countryButton = [...root.querySelectorAll('.country-chip')].find((button) => /Indonesia/.test(button.textContent));
+    assert.ok(countryButton, 'supplier country ID is represented by a selectable chip');
+    countryButton.dispatchEvent(new window.Event('click'));
     await settle();
-    assert.match(root.outerHTML, /Tidak ada layanan yang cocok/, 'empty state is explicit');
+    let rows = [...root.querySelectorAll('.copy-field')].map((row) => row.textContent);
+    assert.equal(rows.length, 2, 'all returned offers are shown');
+    assert.match(rows[0], /1\.000/, 'default order is the lowest numeric sale price');
+    assert.match(rows[1], /2\.500/);
+    assert.match(root.outerHTML, /Masuk untuk membeli/, 'guest is prompted to authenticate before checkout');
 
+    const sort = root.querySelector('select[aria-label="Urutkan penawaran"]');
+    sort.querySelectorAll('option').forEach((option) => option.removeAttribute('selected'));
+    sort.querySelector('option[value="price-desc"]').setAttribute('selected', '');
+    sort.dispatchEvent(new window.Event('change'));
+    await settle();
+    rows = [...root.querySelectorAll('.copy-field')].map((row) => row.textContent);
+    assert.match(rows[0], /2\.500/, 'descending sort uses the numeric sale price');
+
+    const buyButton = [...root.querySelectorAll('button')].find((button) => button.textContent.includes('Masuk untuk membeli'));
+    assert.ok(buyButton);
+    buyButton.dispatchEvent(new window.Event('click'));
+    const loginNavigation = ctx.__navigations.at(-1);
+    assert.match(loginNavigation, /^\/login\?next=/);
+    const next = new URL(loginNavigation, 'http://localhost').searchParams.get('next');
+    const purchaseContext = new URL(next, 'http://localhost');
+    assert.equal(purchaseContext.pathname, '/services');
+    assert.equal(purchaseContext.searchParams.get('server'), 'server1');
+    assert.equal(purchaseContext.searchParams.get('app'), 'wa');
+    assert.equal(purchaseContext.searchParams.get('country'), '6');
+    assert.equal(purchaseContext.searchParams.get('offer'), 'offer-wa-high', 'selected supplier offer ID is returned after login unchanged');
+
+    const appSelect = root.querySelector('select[aria-label="Pilih aplikasi"]');
+    appSelect.querySelectorAll('option').forEach((option) => option.removeAttribute('selected'));
+    appSelect.querySelector('option[value="tg"]').setAttribute('selected', '');
+    appSelect.dispatchEvent(new window.Event('change'));
+    await settle();
+    assert.match(root.outerHTML, /Telegram · pilih negara/, 'app selection follows the supplier ID');
     rendered.cleanup?.();
   } finally {
     fetcher.restore();
   }
 });
+test('profile shows safe Google link controls and password recovery for OAuth-only accounts', async () => {
+  setupDom();
+  const { createApi, ApiError } = await import('../public/js/api.js');
+  const { createStore } = await import('../public/js/store.js');
+  const { createLayout } = await import('../public/js/layout.js');
+  globalThis.__finzzStore = { createStore };
+  globalThis.__finzzApiError = ApiError;
+  globalThis.__finzzLayout = (store, navigate) =>
+    createLayout({ store, navigate, getTheme: () => 'dark', onToggleTheme: () => {}, onLogout: async () => {} });
+
+  const routes = baseRoutes();
+  const identityRoute = routes.find((route) => route.match === '/api/auth/identities');
+  const fetcher = installFetch(routes);
+  const api = createApi({ getCsrfToken: () => 'csrf-token', onUnauthorized: () => {} });
+  const publicSettings = {
+    ...FIXTURES.config,
+    app: { ...FIXTURES.config.app, oauth: { google: true } }
+  };
+  try {
+    identityRoute.body = { loginMethods: { passwordEnabled: true, identities: [] } };
+    const unlinked = await (await page('profile'))(makeCtx({ api, pathname: '/profile', publicSettings }));
+    assert.match(unlinked.node.outerHTML, /Tautkan Google/, 'Google linking is available only when configured and authenticated');
+
+    identityRoute.body = { loginMethods: { passwordEnabled: false, identities: [
+      { provider: 'google', email: 'user@finzz.test', name: 'User Google', linkedAt: new Date().toISOString() }
+    ] } };
+    const linked = await (await page('profile'))(makeCtx({ api, pathname: '/profile', publicSettings }));
+    assert.match(linked.node.outerHTML, /Terhubung/);
+    assert.match(linked.node.outerHTML, /user@finzz\.test/);
+    assert.match(linked.node.outerHTML, /Atur password melalui email/);
+    assert.ok(!linked.node.outerHTML.includes('provider-subject'), 'Google subject is never rendered to the browser');
+    assert.ok(!linked.node.outerHTML.includes('user@finzz.test:google'), 'identity key material is never rendered');
+  } finally {
+    fetcher.restore();
+  }
+});
+
 test('notifications page lists real inbox rows and marks them read', async () => {
   setupDom();
   const { createApi } = await import('../public/js/api.js');

@@ -10,7 +10,8 @@ export default async function forgotPassword(ctx) {
   const { api, navigate, layout } = ctx;
 
   const form = el('form', { class: 'auth-card', attrs: { novalidate: true } });
-  const email = Input({ label: 'Email terdaftar', name: 'email', type: 'email', autocomplete: 'email', required: true, placeholder: 'nama@email.com' });
+  const suggestedEmail = new URLSearchParams(window.location.search).get('email') || '';
+  const email = Input({ label: 'Email terdaftar', name: 'email', type: 'email', autocomplete: 'email', required: true, placeholder: 'nama@email.com', value: suggestedEmail.slice(0, 254) });
   const submit = Button({ variant: 'primary', size: 'lg', block: true, type: 'submit', children: 'Kirim tautan reset' });
   const result = el('div');
 

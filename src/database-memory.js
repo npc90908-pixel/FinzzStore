@@ -58,6 +58,7 @@ export function createMemoryDatabase({ logger } = {}) {
   const store = {
   verifyContexts: new Map(),
     profiles: new Map(),
+    oauthIdentities: new Map(),
     wallets: new Map(),
     transactions: [],
     deposits: new Map(),
@@ -320,6 +321,7 @@ export function createMemoryDatabase({ logger } = {}) {
         const profile = store.profiles.get(params[0]);
         if (!profile) return { rows: [] };
         profile.password_hash = params[1];
+        profile.password_auth_enabled = true;
         profile.password_updated_at = nowIso();
         profile.updated_at = nowIso();
         return { rows: [structuredClone(profile)] };
@@ -347,6 +349,7 @@ export function createMemoryDatabase({ logger } = {}) {
             status: 'active',
             email_verified_at: null,
             password_hash: params.p_password_hash,
+            password_auth_enabled: true,
             password_updated_at: nowIso(),
             failed_login_count: 0,
             locked_until: null,
@@ -437,6 +440,7 @@ export function createMemoryDatabase({ logger } = {}) {
           const profile = store.profiles.get(token.user_id);
           if (profile) {
             profile.password_hash = params.p_password_hash;
+            profile.password_auth_enabled = true;
             profile.password_updated_at = nowIso();
             profile.failed_login_count = 0;
             profile.locked_until = null;
@@ -524,6 +528,7 @@ export function createMemoryDatabase({ logger } = {}) {
           role, status: 'active',
           email_verified_at: verified ? nowIso() : null,
           password_hash: passwordHash,
+          password_auth_enabled: true,
           password_updated_at: nowIso(),
           failed_login_count: 0, locked_until: null, last_login_at: null, last_seen_at: null,
           created_at: nowIso(), updated_at: nowIso()
@@ -552,6 +557,7 @@ export function createMemoryDatabase({ logger } = {}) {
             role: 'user',
             status: 'active',
             email_verified_at: null,
+            password_auth_enabled: false,
             last_seen_at: null,
             created_at: nowIso(),
             updated_at: nowIso()
@@ -619,6 +625,109 @@ export function createMemoryDatabase({ logger } = {}) {
       },
       async count() {
         return store.profiles.size;
+      }
+    },
+
+    oauthIdentities: {
+      async listForUser(userId) {
+        return [...store.oauthIdentities.values()]
+          .filter((identity) => identity.user_id === userId)
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+          .map(({ provider, provider_email, provider_name, created_at }) => ({
+            provider, provider_email, provider_name, linked_at: created_at
+          }));
+      },
+      async findBySubject(provider, subject) {
+        const identity = store.oauthIdentities.get(`${provider}:${subject}`);
+        return identity ? structuredClone(identity) : null;
+      },
+      async link({ userId, providerSubject, email, name, ip, userAgent }) {
+        return withLock(`oauth-user:${userId}`, () => withLock(`oauth-sub:${providerSubject}`, async () => {
+          const profile = store.profiles.get(userId);
+          if (!profile) return { linked: false, reason: 'USER_NOT_FOUND' };
+          const bySubject = store.oauthIdentities.get(`google:${providerSubject}`);
+          if (bySubject && bySubject.user_id !== userId) {
+            auditRecord({
+              adminId: null, action: 'oauth.google.link_conflict', targetType: 'user', targetId: userId,
+              reason: 'Google subject is already linked to another account',
+              after: { provider: 'google', email, conflictingUserId: bySubject.user_id }, ip, userAgent
+            });
+            return { linked: false, conflict: true };
+          }
+          const byUser = [...store.oauthIdentities.values()].find((item) => item.user_id === userId && item.provider === 'google');
+          if (byUser && byUser.provider_subject !== providerSubject) {
+            auditRecord({
+              adminId: null, action: 'oauth.google.link_conflict', targetType: 'user', targetId: userId,
+              reason: 'A different Google subject is already linked to this account',
+              after: { provider: 'google', email }, ip, userAgent
+            });
+            return { linked: false, conflict: true };
+          }
+          if (bySubject) {
+            bySubject.provider_email = email;
+            bySubject.provider_name = name || null;
+            bySubject.updated_at = nowIso();
+            return { linked: true, alreadyLinked: true };
+          }
+          const row = {
+            id: randomUUID(), user_id: userId, provider: 'google', provider_subject: providerSubject,
+            provider_email: email, provider_name: name || null, created_at: nowIso(), updated_at: nowIso()
+          };
+          store.oauthIdentities.set(`google:${providerSubject}`, row);
+          auditRecord({
+            adminId: null, action: 'oauth.google.link', targetType: 'user', targetId: userId,
+            reason: 'Google identity linked by authenticated user',
+            after: { provider: 'google', email }, ip, userAgent
+          });
+          return { linked: true, alreadyLinked: false };
+        }));
+      },
+      async createAccount({ email, passwordHash, username, providerSubject, name, ip, userAgent }) {
+        const normalised = String(email).toLowerCase();
+        return withLock(`oauth-sub:${providerSubject}`, () => withLock(`email:${normalised}`, async () => {
+          const existingIdentity = store.oauthIdentities.get(`google:${providerSubject}`);
+          if (existingIdentity) return { created: false, identity: structuredClone(existingIdentity) };
+          if ([...store.profiles.values()].some((profile) => profile.email.toLowerCase() === normalised)) {
+            return { created: false, emailConflict: true };
+          }
+          const id = randomUUID();
+          const profile = {
+            id, email: normalised, username: username || null, full_name: name || null, phone: null,
+            role: 'user', status: 'active', email_verified_at: nowIso(),
+            password_hash: passwordHash, password_auth_enabled: false, password_updated_at: nowIso(),
+            failed_login_count: 0, locked_until: null, last_login_at: null, last_seen_at: null,
+            created_at: nowIso(), updated_at: nowIso()
+          };
+          store.profiles.set(id, profile);
+          const wallet = walletOf(id);
+          const identity = {
+            id: randomUUID(), user_id: id, provider: 'google', provider_subject: providerSubject,
+            provider_email: normalised, provider_name: name || null, created_at: nowIso(), updated_at: nowIso()
+          };
+          store.oauthIdentities.set(`google:${providerSubject}`, identity);
+          auditRecord({
+            adminId: null, action: 'auth.google_register', targetType: 'user', targetId: id,
+            reason: 'New account created with verified Google OIDC identity',
+            after: { provider: 'google', email: normalised }, ip, userAgent
+          });
+          return { created: true, profile: structuredClone(profile), wallet: structuredClone(wallet) };
+        }));
+      },
+      async unlink({ userId, ip, userAgent }) {
+        return withLock(`oauth-user:${userId}`, async () => {
+          const identity = [...store.oauthIdentities.values()].find((item) => item.user_id === userId && item.provider === 'google');
+          if (!identity) return { unlinked: false, reason: 'NOT_LINKED' };
+          const profile = store.profiles.get(userId);
+          const otherIdentity = [...store.oauthIdentities.values()].some((item) => item.user_id === userId && item.provider !== 'google');
+          if (!profile?.password_auth_enabled && !otherIdentity) return { unlinked: false, reason: 'LAST_LOGIN_METHOD' };
+          store.oauthIdentities.delete(`google:${identity.provider_subject}`);
+          auditRecord({
+            adminId: null, action: 'oauth.google.unlink', targetType: 'user', targetId: userId,
+            reason: 'Google identity unlinked by authenticated user',
+            before: { provider: 'google', email: identity.provider_email }, ip, userAgent
+          });
+          return { unlinked: true };
+        });
       }
     },
 
@@ -1546,6 +1655,7 @@ export function createMemoryDatabase({ logger } = {}) {
       role,
       status: 'active',
       email_verified_at: nowIso(),
+      password_auth_enabled: false,
       last_seen_at: null,
       created_at: nowIso(),
       updated_at: nowIso()

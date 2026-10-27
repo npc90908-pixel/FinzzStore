@@ -96,12 +96,15 @@ test('Google OAuth uses a state cookie, creates a verified session, and returns 
     assert.equal(authorizeUrl.searchParams.get('client_id'), 'test-client-id');
     assert.equal(authorizeUrl.searchParams.get('code_challenge_method'), 'S256');
     assert.ok(authorizeUrl.searchParams.get('code_challenge'));
+    assert.ok(authorizeUrl.searchParams.get('nonce'), 'OIDC nonce is included in the authorization request');
     assert.ok(client.cookies().fz_oauth_verifier);
+    assert.ok(client.cookies().fz_oauth_nonce);
     const invalidState = await client.get('/api/auth/google/callback?code=fake-google-code&state=not-the-state');
     assert.equal(invalidState.status, 302);
     assert.equal(invalidState.headers.get('location'), '/login?oauth=state');
     assert.equal(client.cookies().fz_oauth_state, undefined, 'one-time state cookies are cleared after failure');
     assert.equal(client.cookies().fz_oauth_verifier, undefined, 'PKCE verifier is cleared after failure');
+    assert.equal(client.cookies().fz_oauth_nonce, undefined, 'OIDC nonce is cleared after failure');
 
     const secondStart = await client.get('/api/auth/google?next=%2Fwallet%3Fpage%3D2');
     const state = new URL(secondStart.headers.get('location')).searchParams.get('state');
@@ -114,6 +117,8 @@ test('Google OAuth uses a state cookie, creates a verified session, and returns 
     assert.equal(client.cookies().fz_oauth_state, undefined);
     assert.equal(client.cookies().fz_oauth_next, undefined);
     assert.equal(client.cookies().fz_oauth_verifier, undefined);
+    assert.equal(client.cookies().fz_oauth_nonce, undefined);
+    assert.equal(client.cookies().fz_oauth_purpose, undefined);
 
     const session = await client.get('/api/auth/session');
     assert.equal(session.status, 200);
@@ -121,6 +126,76 @@ test('Google OAuth uses a state cookie, creates a verified session, and returns 
     const profile = [...oauthHarness.db.store.profiles.values()].find((row) => row.email === 'oauth.created@finzz.test');
     assert.ok(profile.email_verified_at, 'Google-verified account enters the app as verified');
     assert.equal(profile.full_name, 'Akun Google');
+    assert.equal(profile.password_auth_enabled, false, 'random generated hash is not treated as a user-known password');
+    const methods = await client.get('/api/auth/identities');
+    assert.equal(methods.status, 200);
+    assert.equal(methods.json.loginMethods.identities[0].provider, 'google');
+    assert.equal(methods.json.loginMethods.identities[0].email, 'oauth.created@finzz.test');
+    assert.ok(!methods.text.includes('google-subject'), 'provider subject stays server-side');
+    const unsafeUnlink = await client.post('/api/auth/google/unlink', {});
+    assert.equal(unsafeUnlink.status, 409);
+    assert.equal(unsafeUnlink.json.error.code, 'LAST_LOGIN_METHOD', 'Google-only account cannot unlink its only login method');
+  } finally {
+    await oauthHarness.close();
+  }
+});
+
+test('Google account matching requires explicit linking; link is session-bound and unlink is audited/safe', async () => {
+  const oauthHarness = await startTestApp({ env: {
+    APP_URL: 'http://127.0.0.1:0',
+    GOOGLE_CLIENT_ID: 'test-client-id',
+    GOOGLE_CLIENT_SECRET: 'test-client-secret',
+    GOOGLE_REDIRECT_URI: 'http://127.0.0.1:0/api/auth/google/callback'
+  } });
+  const emailAddress = email('existing-oauth');
+  const first = oauthHarness.client();
+  const anonymous = oauthHarness.client();
+  const second = oauthHarness.client();
+  try {
+    await registerUser(oauthHarness, first, { email: emailAddress, password: 'Str0ngPass!' });
+    oauthHarness.services.googleOAuth.authenticate = async () => ({
+      provider: 'google', providerSubject: 'google-link-subject', email: emailAddress, name: 'Verified Google'
+    });
+
+    const loginStart = await anonymous.get('/api/auth/google');
+    const loginState = new URL(loginStart.headers.get('location')).searchParams.get('state');
+    const loginCallback = await anonymous.get(`/api/auth/google/callback?code=code&state=${encodeURIComponent(loginState)}`);
+    assert.equal(loginCallback.headers.get('location'), '/login?oauth=link-required');
+    assert.equal((await anonymous.get('/api/auth/session')).status, 401, 'email match does not issue a session');
+
+    const linkStart = await first.post('/api/auth/google/link', {});
+    assert.equal(linkStart.status, 200);
+    const linkAuthorize = new URL(linkStart.json.authorizeUrl);
+    const state = linkAuthorize.searchParams.get('state');
+    assert.ok(linkAuthorize.searchParams.get('nonce'));
+    const linked = await first.get(`/api/auth/google/callback?code=code&state=${encodeURIComponent(state)}`);
+    assert.equal(linked.headers.get('location'), '/profile?oauth=linked');
+    const methods = await first.get('/api/auth/identities');
+    assert.equal(methods.json.loginMethods.identities.length, 1);
+    assert.equal(methods.json.loginMethods.identities[0].provider, 'google');
+
+    await registerUser(oauthHarness, second, { email: email('conflicting-user'), password: 'Str0ngPass!' });
+    const conflictStart = await second.post('/api/auth/google/link', {});
+    const conflictState = new URL(conflictStart.json.authorizeUrl).searchParams.get('state');
+    const conflict = await second.get(`/api/auth/google/callback?code=code&state=${encodeURIComponent(conflictState)}`);
+    assert.equal(conflict.headers.get('location'), '/profile?oauth=conflict');
+    assert.ok(oauthHarness.db.store.auditLogs.some((entry) => entry.action === 'oauth.google.link_conflict'));
+
+    const unlinked = await first.post('/api/auth/google/unlink', { password: 'Str0ngPass!' });
+    assert.equal(unlinked.status, 200);
+    assert.equal((await first.get('/api/auth/identities')).json.loginMethods.identities.length, 0);
+    assert.ok(oauthHarness.db.store.auditLogs.some((entry) => entry.action === 'oauth.google.unlink'));
+
+    const sessionSwap = oauthHarness.client();
+    const signedInAgain = await sessionSwap.post('/api/auth/login', { email: emailAddress, password: 'Str0ngPass!' });
+    assert.equal(signedInAgain.status, 200);
+    const pendingLink = await sessionSwap.post('/api/auth/google/link', {});
+    const pendingState = new URL(pendingLink.json.authorizeUrl).searchParams.get('state');
+    await sessionSwap.post('/api/auth/logout', {});
+    await registerUser(oauthHarness, sessionSwap, { email: email('switched-profile'), password: 'Str0ngPass!' });
+    const switchedCallback = await sessionSwap.get(`/api/auth/google/callback?code=code&state=${encodeURIComponent(pendingState)}`);
+    assert.equal(switchedCallback.headers.get('location'), '/profile?oauth=link-session', 'link callback is rejected if the FINZZ session changes');
+    assert.equal((await sessionSwap.get('/api/auth/identities')).json.loginMethods.identities.length, 0);
   } finally {
     await oauthHarness.close();
   }
@@ -168,6 +243,88 @@ test('public catalogue reports available:false when it holds no rows', async () 
     assert.equal(response.json.available, false, 'an empty catalogue must never claim availability');
   } finally {
     await h.close();
+  }
+});
+
+test('guest catalog discovery uses dynamic TeleKos reads and exposes every numerically sorted sale offer', async () => {
+  const guest = h.client();
+  const servers = await guest.get('/api/public/catalog/servers');
+  assert.equal(servers.status, 200);
+  assert.equal(servers.json.servers.length, 3);
+  assert.ok(servers.json.servers.some((server) => server.id === 'server3'));
+  assert.equal(servers.json.cache.source, 'mock');
+  assert.ok(servers.json.cache.fetchedAt);
+
+  const apps = await guest.get('/api/public/catalog/apps?server=server1');
+  assert.equal(apps.status, 200);
+  assert.ok(apps.json.apps.some((app) => app.id === 'wa'));
+  const countries = await guest.get('/api/public/catalog/countries?server=server1&app=wa');
+  assert.equal(countries.status, 200);
+  assert.ok(countries.json.countries.some((country) => country.id === 6));
+
+  const prices = await guest.get('/api/public/catalog/prices?server=server1&app=wa&country=6');
+  assert.equal(prices.status, 200);
+  assert.ok(prices.json.offers.length > 1);
+  assert.deepEqual(prices.json.offers.map((offer) => offer.salePrice),
+    prices.json.offers.map((offer) => offer.salePrice).slice().sort((a, b) => a - b));
+  assert.ok(prices.json.offers.every((offer) => offer.offerId && Number.isSafeInteger(offer.salePrice)));
+  assert.ok(prices.json.offers.every((offer) => offer.supplierPrice === undefined));
+
+  const refreshed = await guest.get('/api/public/catalog/prices?server=server1&app=wa&country=6&refresh=1');
+  assert.equal(refreshed.status, 200);
+  assert.equal(refreshed.json.cache.refreshRequested, true);
+  const quote = await guest.get(`/api/public/quote?server=server1&app=wa&country=6&offer_id=${encodeURIComponent(prices.json.offers[0].offerId)}`);
+  assert.equal(quote.status, 200);
+  assert.equal(quote.json.live, false, 'mock fixture data is never labeled live');
+  assert.equal(quote.json.source, 'mock');
+  assert.equal(quote.json.cache.fresh, true);
+  assert.ok(Number.isSafeInteger(quote.json.price));
+
+  const guestOrder = await guest.post('/api/orders', { service_id: randomUUID(), idempotency_key: 'guest-order-key-01' });
+  assert.equal(guestOrder.status, 401, 'guests may browse and quote but cannot place an order');
+});
+
+test('dynamic order checkout revalidates provider offer and charges its server-computed price', async () => {
+  await seedBalance(admin.client, user.profile.id, 100_000, 'Dynamic order test balance');
+  const guestCatalog = await h.client().get('/api/public/catalog/prices?server=server1&app=wa&country=6');
+  const offer = guestCatalog.json.offers[0];
+  const order = await user.client.post('/api/orders', {
+    server_id: 'server1', app_id: 'wa', country_id: 6,
+    offer_id: offer.offerId, expected_price: offer.salePrice,
+    idempotency_key: `dynamic-${randomUUID()}`
+  });
+  assert.ok([201, 202].includes(order.status), order.text);
+  assert.equal(order.json.order.app.id, 'wa');
+  assert.equal(order.json.order.country.id, 6);
+  const saved = await h.db.orders.get(order.json.order.id);
+  assert.equal(saved.service_id, null, 'dynamic offers do not require a stale mirrored service row');
+  assert.equal(saved.provider_offer_id, offer.offerId);
+  assert.equal(Number(saved.total_price), offer.salePrice);
+});
+
+test('dynamic checkout rejects a changed live price without touching the wallet', async () => {
+  const guest = h.client();
+  const prices = await guest.get('/api/public/catalog/prices?server=server1&app=wa&country=6');
+  const offer = prices.json.offers[0];
+  const before = await walletBalance(user.client);
+  const originalGetPrices = h.services.supplier.getPrices.bind(h.services.supplier);
+  h.services.supplier.getPrices = async (options) => {
+    const result = await originalGetPrices(options);
+    return { ...result, offers: result.offers.map((item) => item.id === offer.id
+      ? { ...item, offerId: offer.offerId, price: item.price + 1500 }
+      : item) };
+  };
+  try {
+    const response = await user.client.post('/api/orders', {
+      server_id: 'server1', app_id: 'wa', country_id: 6,
+      offer_id: offer.offerId, expected_price: offer.salePrice,
+      idempotency_key: `changed-${randomUUID()}`
+    });
+    assert.equal(response.status, 409);
+    assert.equal(response.json.error.code, 'PRICE_CHANGED');
+    assert.equal(await walletBalance(user.client), before, 'no debit occurs when the live quote differs');
+  } finally {
+    h.services.supplier.getPrices = originalGetPrices;
   }
 });
 

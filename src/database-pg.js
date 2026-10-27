@@ -280,6 +280,57 @@ export function createPgDatabase(config, { logger } = {}) {
       }
     },
 
+    // ------------------------------------------------------- OAuth identities
+    // Subjects are private server-side identifiers; listForUser returns only
+    // the provider/email/linked timestamp needed by the authenticated profile UI.
+    oauthIdentities: {
+      async listForUser(userId) {
+        const { rows } = await query(
+          `select provider, provider_email, provider_name, created_at as linked_at
+             from public.oauth_identities where user_id = $1 order by created_at`,
+          [userId], { table: 'oauth_identities' }
+        );
+        return rows;
+      },
+      async findBySubject(provider, subject) {
+        const { rows } = await query(
+          `select user_id, provider, provider_subject, provider_email, provider_name, created_at
+             from public.oauth_identities where provider = $1 and provider_subject = $2 limit 1`,
+          [provider, subject], { table: 'oauth_identities' }
+        );
+        return rows[0] ?? null;
+      },
+      async link({ userId, providerSubject, email, name, ip, userAgent }) {
+        return call('rpc_link_google_identity', {
+          p_user_id: userId,
+          p_provider_subject: providerSubject,
+          p_provider_email: email,
+          p_provider_name: name || null,
+          p_ip: ip || null,
+          p_user_agent: userAgent || null
+        });
+      },
+      async createAccount({ email, passwordHash, username, providerSubject, name, ip, userAgent }) {
+        return call('rpc_create_google_account', {
+          p_email: email,
+          p_password_hash: passwordHash,
+          p_username: username || null,
+          p_provider_subject: providerSubject,
+          p_provider_email: email,
+          p_provider_name: name || null,
+          p_ip: ip || null,
+          p_user_agent: userAgent || null
+        });
+      },
+      async unlink({ userId, ip, userAgent }) {
+        return call('rpc_unlink_google_identity', {
+          p_user_id: userId,
+          p_ip: ip || null,
+          p_user_agent: userAgent || null
+        });
+      }
+    },
+
     // --------------------------------------------------------------- wallets
     wallets: {
       async get(userId) {
