@@ -940,14 +940,17 @@ end $$;
 
 
 -- ============================================================================
--- MIGRATION 012 — allow documented AstraPay QRIS/service fees safely.
--- Migration 011 assumed all gateway fees were always zero. Keep that migration
--- immutable; replace the RPCs with checks that permit non-negative declared fees while
--- allowing a separate payment unique code in pay_amount; wallet credit remains
--- base_amount only.
+-- MIGRATION 012 — enforce the existing zero-fee AstraPay policy.
+-- Keep migration 011 immutable. Replace the gateway RPCs with an explicit
+-- zero-fee guard while allowing a separate unique-code offset in pay_amount;
+-- wallet credit remains base_amount only.
 -- Apply after migration 011. This migration is additive/idempotent.
 -- ============================================================================
 begin;
+
+alter table public.deposits drop constraint if exists deposits_gateway_fee_zero;
+alter table public.deposits add constraint deposits_gateway_fee_zero
+  check (method <> 'gateway' or fee_amount = 0);
 
 create or replace function public.rpc_store_astrapay_invoice(
   p_deposit_id uuid,
@@ -970,7 +973,7 @@ declare
 begin
   if p_provider_order_id is null or char_length(p_provider_order_id) not between 1 and 120
      or p_reference is null or p_pay_amount is null or p_fee_amount is null
-     or p_fee_amount < 0 or p_fee_amount <> trunc(p_fee_amount)
+     or p_fee_amount <> 0
      or p_checkout_url is null
      or p_checkout_url !~ '^https://gateway\.astrapay\.biz\.id/pay/'
      or p_qris_payload is null or char_length(p_qris_payload) > 10000
@@ -1033,7 +1036,6 @@ begin
      or p_event_type not in ('order.paid','reconciliation.paid')
      or p_provider_order_id is null or char_length(p_provider_order_id) not between 1 and 120
      or p_reference is null or p_base_amount is null or p_fee_amount is null
-     or p_fee_amount < 0 or p_fee_amount <> trunc(p_fee_amount)
      or p_pay_amount is null or p_paid_at is null then
     raise exception using errcode = 'P0001', message = 'INVALID_INPUT';
   end if;
@@ -1072,7 +1074,7 @@ begin
   end if;
   if (v_deposit.provider_order_id is not null and v_deposit.provider_order_id <> p_provider_order_id)
      or p_base_amount <> v_deposit.amount
-     or p_fee_amount < 0
+     or p_fee_amount <> 0
      or p_pay_amount < p_base_amount + p_fee_amount
      or p_pay_amount < p_base_amount
      or p_pay_amount <> trunc(p_pay_amount)

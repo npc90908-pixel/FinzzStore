@@ -26,12 +26,11 @@ already been rewritten as a standalone EJS template.
 
 ## Database changes
 
-Migration `012_astrapay_dynamic_fees.sql` updates the two AstraPay RPC functions
-without editing the already-deployed migration 011. It allows documented nonzero
-fees while requiring `pay_amount` to cover the base amount plus declared fees.
-The wallet ledger still credits only the verified base/credit amount. The payment
-amount may additionally include a gateway unique code, so it is not forced to equal
-base amount plus fees exactly.
+Migration `012_astrapay_zero_fee_guard.sql` updates the AstraPay RPC functions
+without editing migration 011 and adds a database constraint enforcing the
+existing zero-fee policy. A gateway unique-code offset may still make
+`pay_amount` higher than the deposit amount; the ledger credits only the verified
+base amount, never that offset.
 
 Run `npm run db:migrate:dry` first, review the output, back up production, and then
 run `npm run db:migrate` against the intended database. No production database was

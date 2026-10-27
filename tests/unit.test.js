@@ -661,6 +661,7 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
   const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
   const paidAt = new Date().toISOString();
   const calls = [];
+  let qrisFee = 0;
   const fakeFetch = async (url, options) => {
     calls.push({ url: String(url), options });
     const isCreate = options.method === 'POST';
@@ -672,8 +673,8 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
         status: isCreate ? 'pending' : 'paid',
         base_amount: 1000,
         credit_amount: 1000,
-        fee_qris: 5,
-        service_fee: 2,
+        fee_qris: qrisFee,
+        service_fee: 0,
         pay_amount: 1007,
         checkout_url: 'https://gateway.astrapay.biz.id/pay/order-1',
         qris: '000201-test-payload',
@@ -689,10 +690,10 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
     redirectUrl: 'https://finzz.test/wallet'
   });
   assert.equal(invoice.providerOrderId, 'order-1');
-  assert.equal(invoice.payAmount, 1007);
-  assert.equal(invoice.feeAmount, 7);
-  assert.equal(invoice.feeQris, 5);
-  assert.equal(invoice.serviceFee, 2);
+  assert.equal(invoice.payAmount, 1007, 'gateway unique-code offset stays in the payable amount');
+  assert.equal(invoice.feeAmount, 0);
+  assert.equal(invoice.feeQris, 0);
+  assert.equal(invoice.serviceFee, 0);
   assert.equal(calls[0].options.headers['x-api-key'], 'unit-test-api-key-not-real');
   assert.equal(calls[0].options.body.includes('1000'), true);
 
@@ -702,9 +703,21 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
     payAmount: 1007, expiresAt
   });
   assert.equal(paid.payAmount, 1007);
-  assert.equal(paid.feeAmount, 7);
+  assert.equal(paid.feeAmount, 0);
   assert.equal(paid.creditAmount, 1000);
   assert.equal(calls[1].options.method, 'GET');
+
+  qrisFee = 1;
+  await assert.rejects(() => adapter.createPayment({
+    reference: 'FZ-UNIT-REF', amount: 1000, expiresIn: 600,
+    webhookUrl: 'https://finzz.test/api/webhooks/astrapay',
+    redirectUrl: 'https://finzz.test/wallet'
+  }), (error) => error.code === 'PAYMENT_PROVIDER_CONTRACT_INVALID');
+  assert.throws(() => adapter.validatePaidOrder({ ...remote, fee_qris: 1 }, {
+    providerOrderId: 'order-1', reference: 'FZ-UNIT-REF', amount: 1000,
+    payAmount: 1007, expiresAt
+  }), (error) => error.code === 'PAYMENT_AMOUNT_MISMATCH');
+  qrisFee = 0;
 
   const rawBody = Buffer.from('{"event":"order.paid","reference":"FZ-UNIT-REF"}');
   const timestamp = String(Math.floor(Date.now() / 1000));

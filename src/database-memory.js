@@ -1264,7 +1264,7 @@ export function createMemoryDatabase({ logger } = {}) {
           if (!['pending', 'approved'].includes(current.status)) throw appErrorFromCode('DEPOSIT_ALREADY_REVIEWED');
           if (current.provider_order_id && current.provider_order_id !== params.providerOrderId) throw appErrorFromCode('PAYMENT_ORDER_MISMATCH');
           const conflict = [...store.deposits.values()].some((d) => d.id !== current.id && d.provider_order_id === params.providerOrderId);
-          if (conflict || !Number.isSafeInteger(params.feeAmount) || params.feeAmount < 0
+          if (conflict || !Number.isSafeInteger(params.feeAmount) || params.feeAmount !== 0
               || !Number.isSafeInteger(params.payAmount)
               || params.payAmount < Number(current.amount) + params.feeAmount) {
             throw appErrorFromCode('PAYMENT_AMOUNT_MISMATCH');
@@ -1314,7 +1314,7 @@ export function createMemoryDatabase({ logger } = {}) {
           const expiresAtMs = Date.parse(deposit.expires_at || '');
           if (deposit.provider_order_id && deposit.provider_order_id !== params.providerOrderId
               || Number(deposit.amount) !== params.baseAmount
-              || !Number.isSafeInteger(params.feeAmount) || params.feeAmount < 0
+              || !Number.isSafeInteger(params.feeAmount) || params.feeAmount !== 0
               || !Number.isSafeInteger(params.payAmount)
               || params.payAmount < params.baseAmount + params.feeAmount
               || (deposit.pay_amount !== null && Number(deposit.pay_amount) !== params.payAmount)
