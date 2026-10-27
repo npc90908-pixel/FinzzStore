@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+
+# secrets — never commit real values
+.env
+.env.*
+!.env.example
+.netrc
+.git-credentials
+
+# runtime data: private deposit proofs and process logs
+storage/*
+!storage/.gitkeep
+logs/*
+!logs/.gitkeep
+*.log
+
+# build/test artefacts
+coverage/
+.cache/
+.vercel
+.DS_Store
+.env*
+!.env.example
+
+# arsip yang diunduh dari Google Drive
+google_drive/

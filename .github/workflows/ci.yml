@@ -1,0 +1,65 @@
+# ============================================================================
+# CI — dijalankan pada setiap push & pull request.
+#
+# Tiga gerbang yang sama dengan yang dipakai sebelum deploy:
+#   1. npm run check   — aturan statis (tanpa .html fisik, tanpa rahasia di
+#                        aset publik, dependensi sesuai)
+#   2. npm test        — unit + API + UI + resilience (in-memory driver)
+#   3. npm run test:sql — kontrak PostgreSQL sungguhan, memakai service
+#                        container. Tanpa ini, migrasi yang salah baru terlihat
+#                        di produksi.
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: finzz
+          POSTGRES_PASSWORD: finzz_ci_pw
+          POSTGRES_DB: finzz_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://finzz:finzz_ci_pw@127.0.0.1:5432/finzz_test
+      DATABASE_SSL: disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static checks
+        run: npm run check
+
+      - name: Unit, API and UI tests
+        run: npm test
+
+      - name: Apply schema + migrations (idempotent)
+        run: npm run db:bootstrap
+
+      - name: Schema contract tests
+        run: npm run test:sql
+
+      - name: Verify schema matches the application contract
+        run: npm run db:verify
+        continue-on-error: true   # a fresh CI database has no admin account yet

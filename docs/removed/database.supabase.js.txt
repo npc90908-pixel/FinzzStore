@@ -1,0 +1,644 @@
+// ============================================================================
+// DATABASE — Supabase PostgreSQL driver (production).
+//
+// The browser never talks to Supabase directly. This module is the only place
+// that uses the service role key; every financial mutation goes through a
+// PostgreSQL RPC defined in database/functions.sql so that locking, idempotency
+// and refund rules live in the database, not in JavaScript.
+// ============================================================================
+import { createClient } from '@supabase/supabase-js';
+import { fromDbError } from './errors.js';
+
+const TABLE_SELECT = '*';
+
+export function createSupabaseDatabase(config, { logger } = {}) {
+  const { url, serviceRoleKey, anonKey } = config.supabase;
+  if (!url || !serviceRoleKey) throw new Error('Supabase configuration is incomplete');
+
+  // Service role client: bypasses RLS. Server only. Never exposed to clients.
+  const admin = createClient(url, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+    global: { headers: { 'X-Client-Info': 'finzz-store-server' } }
+  });
+
+  // Anon client used exclusively to validate user access tokens and to perform
+  // password sign-in (Supabase Auth requires the public key for these calls).
+  const anon = createClient(url, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false }
+  });
+
+  // Every failure carries the RPC/table name plus the raw PostgREST code so the
+  // operator can tell a stale schema cache (PGRST202) from a revoked grant
+  // (42501) or a missing migration (42P01) straight from the log line.
+  const rpc = async (name, params) => {
+    const { data, error } = await admin.rpc(name, params);
+    if (error) throw fromDbError(error, { rpc: name });
+    return data;
+  };
+
+  const query = async (builder, table = null) => {
+    const { data, error } = await builder;
+    if (error) throw fromDbError(error, { table });
+    return data;
+  };
+
+  /**
+   * Supabase Auth (GoTrue) errors are NOT PostgREST errors. They carry
+   * `code` (e.g. over_email_send_rate_limit) and `status` (429). Routing them
+   * through fromDbError() turned every provider limit into `500 DB_ERROR`,
+   * which is exactly what production logged for POST /api/auth/register.
+   */
+  const authError = (error, action) => {
+    const err = new Error(error?.message || `Supabase Auth gagal (${action})`);
+    err.name = 'AuthProviderError';
+    err.supabaseCode = String(error?.code || '');
+    err.status = Number(error?.status) || null;
+    err.action = action;
+    // 429 + Retry-After are safe to surface; never echo provider internals.
+    const retryAfter = error?.retryAfter ?? error?.retry_after ?? null;
+    if (retryAfter) err.retryAfter = Number(retryAfter) || null;
+    return err;
+  };
+
+  const db = {
+    kind: 'supabase',
+    admin,
+    anon,
+
+    async ping() {
+      const started = Date.now();
+      const { error } = await admin.from('app_settings').select('key', { head: true, count: 'exact' }).limit(1);
+      if (error) throw fromDbError(error, { table: 'app_settings', message: 'Database tidak dapat diakses.' });
+      return { ok: true, latencyMs: Date.now() - started };
+    },
+
+    // ------------------------------------------------------------------ auth
+    auth: {
+      async signUp({ email, password, metadata }) {
+        const { data, error } = await anon.auth.signUp({
+          email,
+          password,
+          options: { data: metadata, emailRedirectTo: `${config.appUrl}/verify-email` }
+        });
+        if (error) throw authError(error, 'signup');
+        return { user: data.user, session: data.session };
+      },
+      async signIn({ email, password }) {
+        const { data, error } = await anon.auth.signInWithPassword({ email, password });
+        if (error) throw authError(error, 'signin');
+        return data.session;
+      },
+      async refresh(refreshToken) {
+        const { data, error } = await anon.auth.refreshSession({ refresh_token: refreshToken });
+        if (error) throw authError(error, 'refresh');
+        return data.session;
+      },
+      async getUser(accessToken) {
+        const { data, error } = await anon.auth.getUser(accessToken);
+        if (error) return null;
+        return data.user;
+      },
+      async updatePassword(accessToken, password) {
+        const client = createClient(url, anonKey, {
+          auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+          global: { headers: { Authorization: `Bearer ${accessToken}` } }
+        });
+        const { data, error } = await client.auth.updateUser({ password });
+        if (error) throw authError(error, 'update-password');
+        return data.user;
+      },
+      async sendPasswordReset(email) {
+        const { error } = await anon.auth.resetPasswordForEmail(email, {
+          redirectTo: `${config.appUrl}/reset-password`
+        });
+        if (error) throw authError(error, 'password-reset');
+      },
+      async resendVerification(email) {
+        const { error } = await anon.auth.resend({
+          type: 'signup',
+          email,
+          options: { emailRedirectTo: `${config.appUrl}/verify-email` }
+        });
+        if (error) throw authError(error, 'resend-verification');
+      },
+      async signOut(accessToken) {
+        const client = createClient(url, anonKey, {
+          auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+          global: { headers: { Authorization: `Bearer ${accessToken}` } }
+        });
+        await client.auth.signOut().catch(() => {});
+      },
+      async verifyOtp({ tokenHash, type, email }) {
+        const { data, error } = await anon.auth.verifyOtp(
+          tokenHash ? { token_hash: tokenHash, type } : { email, token: tokenHash, type }
+        );
+        if (error) throw authError(error, 'verify-otp');
+        return data.session;
+      }
+    },
+
+    // -------------------------------------------------------------- settings
+    settings: {
+      async get(key) {
+        const rows = await query(admin.from('app_settings').select(TABLE_SELECT).eq('key', key).limit(1), 'app_settings');
+        return rows?.[0]?.value ?? null;
+      },
+      async getAll() {
+        const rows = await query(admin.from('app_settings').select(TABLE_SELECT), 'app_settings');
+        return Object.fromEntries((rows || []).map((r) => [r.key, r.value]));
+      },
+      async getPublic() {
+        const rows = await query(admin.from('app_settings').select('key,value').eq('is_public', true), 'app_settings');
+        return Object.fromEntries((rows || []).map((r) => [r.key, r.value]));
+      },
+      async update(key, value, adminId) {
+        return query(
+          admin.from('app_settings').update({ value, updated_by: adminId }).eq('key', key).select(TABLE_SELECT).single()
+        );
+      }
+    },
+
+    // -------------------------------------------------------------- profiles
+    profiles: {
+      async get(id) {
+        const rows = await query(admin.from('profiles').select(TABLE_SELECT).eq('id', id).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async byEmail(email) {
+        const rows = await query(admin.from('profiles').select(TABLE_SELECT).ilike('email', email).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async ensure({ userId, email, username }) {
+        const data = await rpc('ensure_user_profile', {
+          p_user_id: userId,
+          p_email: email,
+          p_username: username || null
+        });
+        return { profile: data.profile, wallet: data.wallet };
+      },
+      async update(id, patch) {
+        const rows = await query(admin.from('profiles').update(patch).eq('id', id).select(TABLE_SELECT));
+        return rows?.[0] ?? null;
+      },
+      async touch(id) {
+        await admin.from('profiles').update({ last_seen_at: new Date().toISOString() }).eq('id', id);
+      },
+      async list({ search = '', role = null, status = null, limit = 25, offset = 0 } = {}) {
+        let builder = admin.from('profiles').select(TABLE_SELECT, { count: 'exact' });
+        if (search) builder = builder.or(`email.ilike.%${search.replace(/[%,()]/g, '')}%,username.ilike.%${search.replace(/[%,()]/g, '')}%`);
+        if (role) builder = builder.eq('role', role);
+        if (status) builder = builder.eq('status', status);
+        const { data, error, count } = await builder.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async setRole(userId, adminId, role, meta) {
+        return rpc('rpc_set_user_role', {
+          p_user_id: userId,
+          p_admin_id: adminId,
+          p_role: role,
+          p_ip: meta?.ip || null,
+          p_user_agent: meta?.userAgent || null
+        });
+      },
+      async setStatus(userId, adminId, status, reason, meta) {
+        return rpc('rpc_set_user_status', {
+          p_user_id: userId,
+          p_admin_id: adminId,
+          p_status: status,
+          p_reason: reason || null,
+          p_ip: meta?.ip || null,
+          p_user_agent: meta?.userAgent || null
+        });
+      },
+      async count() {
+        const { count: total, error } = await admin.from('profiles').select('id', { head: true, count: 'exact' });
+        if (error) throw fromDbError(error);
+        return total ?? 0;
+      }
+    },
+
+    // --------------------------------------------------------------- wallets
+    wallets: {
+      async get(userId) {
+        const rows = await query(admin.from('wallets').select(TABLE_SELECT).eq('user_id', userId).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async adjust(userId, adminId, { direction, amount, reason, reference, ip, userAgent }) {
+        return rpc('rpc_admin_adjust_balance', {
+          p_user_id: userId,
+          p_admin_id: adminId,
+          p_direction: direction,
+          p_amount: amount,
+          p_reason: reason,
+          p_reference: reference,
+          p_ip: ip || null,
+          p_user_agent: userAgent || null
+        });
+      }
+    },
+
+    // ---------------------------------------------------------- transactions
+    transactions: {
+      async listByUser(userId, { limit = 25, offset = 0 } = {}) {
+        const { data, error, count } = await admin
+          .from('wallet_transactions')
+          .select(TABLE_SELECT, { count: 'exact' })
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async listAll({ limit = 50, offset = 0, type = null } = {}) {
+        let builder = admin.from('wallet_transactions').select(TABLE_SELECT, { count: 'exact' });
+        if (type) builder = builder.eq('type', type);
+        const { data, error, count } = await builder
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      }
+    },
+
+    // -------------------------------------------------------------- services
+    services: {
+      async listPublic() {
+        return query(
+          admin
+            .from('services')
+            .select('id,code,name,app_name,country_id,country_name,country_iso,country_calling_code,price,stock,is_active,price_synced_at,sort_order')
+            .eq('is_active', true)
+            .order('sort_order', { ascending: true })
+            .order('price', { ascending: true }),
+          'services'
+        ) || [];
+      },
+      async listAll({ limit = 200, offset = 0 } = {}) {
+        const { data, error, count } = await admin
+          .from('services')
+          .select(TABLE_SELECT, { count: 'exact' })
+          .order('sort_order', { ascending: true })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async get(id) {
+        const rows = await query(admin.from('services').select(TABLE_SELECT).eq('id', id).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async sync(provider, server, items) {
+        return rpc('rpc_sync_services', { p_provider: provider, p_server: server, p_services: items });
+      },
+      async update(id, patch) {
+        const allowed = {};
+        for (const key of ['is_active', 'markup_bps', 'price', 'sort_order', 'stock', 'name']) {
+          if (key in patch) allowed[key] = patch[key];
+        }
+        const rows = await query(admin.from('services').update(allowed).eq('id', id).select(TABLE_SELECT));
+        return rows?.[0] ?? null;
+      },
+      async lastSyncAt() {
+        const rows = await query(
+          admin.from('catalog_sync_runs').select('started_at,finished_at,status,error,services_upserted').order('started_at', { ascending: false }).limit(1)
+        );
+        return rows?.[0] ?? null;
+      },
+      async recordSyncRun(entry) {
+        return query(admin.from('catalog_sync_runs').insert(entry).select(TABLE_SELECT).single());
+      }
+    },
+
+    // ---------------------------------------------------------------- orders
+    orders: {
+      async create(params) {
+        return rpc('rpc_create_order', {
+          p_user_id: params.userId,
+          p_service_id: params.serviceId,
+          p_idempotency_key: params.idempotencyKey,
+          p_request_hash: params.requestHash,
+          p_supplier_price: params.supplierPrice,
+          p_markup_amount: params.markupAmount,
+          p_tax_amount: params.taxAmount,
+          p_total_price: params.totalPrice,
+          p_provider: params.provider,
+          p_provider_server: params.providerServer,
+          p_provider_app_id: params.providerAppId,
+          p_provider_app_name: params.providerAppName,
+          p_country_id: params.countryId,
+          p_country_name: params.countryName,
+          p_country_iso: params.countryIso,
+          p_provider_offer_id: params.providerOfferId,
+          p_max_active_orders: params.maxActiveOrders ?? 5
+        });
+      },
+      async get(id) {
+        const rows = await query(admin.from('orders').select(TABLE_SELECT).eq('id', id).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async findBySupplierId(supplierOrderId) {
+        const rows = await query(
+          admin.from('orders').select(TABLE_SELECT).eq('supplier_order_id', supplierOrderId).limit(1)
+        );
+        return rows?.[0] ?? null;
+      },
+      async getForUser(id, userId) {
+        const rows = await query(admin.from('orders').select(TABLE_SELECT).eq('id', id).eq('user_id', userId).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async listByUser(userId, { status = null, limit = 20, offset = 0 } = {}) {
+        let builder = admin.from('orders').select(TABLE_SELECT, { count: 'exact' }).eq('user_id', userId);
+        if (status) builder = builder.eq('status', status);
+        const { data, error, count } = await builder
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async listActive(userId) {
+        return query(
+          admin
+            .from('orders')
+            .select(TABLE_SELECT)
+            .eq('user_id', userId)
+            .in('status', ['pending', 'waiting', 'received', 'needs_review'])
+            .order('created_at', { ascending: false })
+        ) || [];
+      },
+      async adminList({ status = null, search = '', limit = 30, offset = 0 } = {}) {
+        let builder = admin.from('orders').select(TABLE_SELECT, { count: 'exact' });
+        if (status) builder = builder.eq('status', status);
+        if (search) builder = builder.or(`supplier_order_id.ilike.%${search.replace(/[%,()]/g, '')}%,phone_number.ilike.%${search.replace(/[%,()]/g, '')}%`);
+        const { data, error, count } = await builder
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async attach({ orderId, supplierOrderId, status, phoneNumber, expiresAt, canCancel, cancelAvailableAt, worker }) {
+        return rpc('rpc_attach_supplier_order', {
+          p_order_id: orderId,
+          p_supplier_order_id: supplierOrderId,
+          p_status: status,
+          p_phone_number: phoneNumber || null,
+          p_expires_at: expiresAt || null,
+          p_can_cancel: canCancel ?? false,
+          p_cancel_available_at: cancelAvailableAt || null,
+          p_worker: worker || 'api'
+        });
+      },
+      async applyState({
+        orderId, status, phoneNumber, otps, canCancel, cancelAvailableAt, expiresAt, source, errorCode, message
+      }) {
+        return rpc('rpc_apply_supplier_state', {
+          p_order_id: orderId,
+          p_status: status,
+          p_phone_number: phoneNumber || null,
+          p_otps: otps || [],
+          p_can_cancel: canCancel ?? null,
+          p_cancel_available_at: cancelAvailableAt || null,
+          p_expires_at: expiresAt || null,
+          p_source: source || 'system',
+          p_error_code: errorCode || null,
+          p_message: message ? String(message).slice(0, 500) : null
+        });
+      },
+      async fail({ orderId, errorCode, message, refund = true, source = 'system' }) {
+        return rpc('rpc_fail_order', {
+          p_order_id: orderId,
+          p_error_code: errorCode || null,
+          p_message: message || null,
+          p_refund: refund,
+          p_source: source
+        });
+      },
+      async beginCancel(orderId, userId) {
+        return rpc('rpc_begin_cancel', { p_order_id: orderId, p_user_id: userId });
+      },
+      async releaseCancel(orderId, message) {
+        return rpc('rpc_release_cancel', { p_order_id: orderId, p_message: message || null });
+      },
+      async refund(orderId, reason, adminId = null) {
+        return rpc('rpc_refund_order', { p_order_id: orderId, p_reason: reason, p_admin_id: adminId });
+      },
+      async claimForSync(limit, leaseSeconds, worker) {
+        return rpc('rpc_claim_orders_for_sync', {
+          p_limit: limit,
+          p_lease_seconds: leaseSeconds,
+          p_worker: worker
+        }) || [];
+      },
+      async releaseLease(orderId, nextSyncAt, errorCode, errorMessage) {
+        return rpc('rpc_release_order_lease', {
+          p_order_id: orderId,
+          p_next_sync_at: nextSyncAt || null,
+          p_error_code: errorCode || null,
+          p_error_message: errorMessage ? String(errorMessage).slice(0, 500) : null
+        });
+      },
+      async flagOrphans(ageSeconds = 180) {
+        return rpc('rpc_flag_orphan_pending_orders', { p_age_seconds: ageSeconds });
+      },
+      async eventsFor(orderId, { limit = 30 } = {}) {
+        const rows = await query(
+          admin.from('order_events')
+            .select('id,event_type,from_status,to_status,source,message,created_at')
+            .eq('order_id', orderId)
+            .order('id', { ascending: false })
+            .limit(limit)
+        );
+        return { rows: rows || [] };
+      },
+      async countActive(userId) {
+        const { count: total, error } = await admin
+          .from('orders').select('id', { head: true, count: 'exact' })
+          .eq('user_id', userId).in('status', ['pending', 'waiting', 'received']);
+        if (error) throw fromDbError(error);
+        return total ?? 0;
+      }
+    },
+
+    // -------------------------------------------------------------- deposits
+    deposits: {
+      async create(params) {
+        return rpc('rpc_create_deposit', {
+          p_user_id: params.userId,
+          p_amount: params.amount,
+          p_proof_path: params.proofPath,
+          p_proof_mime: params.proofMime,
+          p_proof_size: params.proofSize,
+          p_proof_sha256: params.proofSha256,
+          p_user_note: params.note || null,
+          p_min_amount: params.minAmount,
+          p_max_amount: params.maxAmount,
+          p_max_pending: params.maxPending ?? 3
+        });
+      },
+      async get(id) {
+        const rows = await query(admin.from('deposits').select(TABLE_SELECT).eq('id', id).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async listByUser(userId, { limit = 20, offset = 0 } = {}) {
+        const { data, error, count } = await admin
+          .from('deposits').select(TABLE_SELECT, { count: 'exact' })
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async adminList({ status = 'pending', limit = 30, offset = 0 } = {}) {
+        let builder = admin.from('deposits').select(TABLE_SELECT, { count: 'exact' });
+        if (status) builder = builder.eq('status', status);
+        const { data, error, count } = await builder
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      },
+      async approve(id, adminId, amount, note, meta) {
+        return rpc('rpc_approve_deposit', {
+          p_deposit_id: id,
+          p_admin_id: adminId,
+          p_approved_amount: amount,
+          p_admin_note: note || null,
+          p_ip: meta?.ip || null,
+          p_user_agent: meta?.userAgent || null
+        });
+      },
+      async reject(id, adminId, reason, meta) {
+        return rpc('rpc_reject_deposit', {
+          p_deposit_id: id,
+          p_admin_id: adminId,
+          p_reason: reason,
+          p_ip: meta?.ip || null,
+          p_user_agent: meta?.userAgent || null
+        });
+      }
+    },
+
+    // ----------------------------------------------------------------- audit
+    audit: {
+      async log(entry) {
+        return query(
+          admin.from('admin_audit_logs').insert({
+            admin_id: entry.adminId,
+            action: entry.action,
+            target_type: entry.targetType,
+            target_id: entry.targetId || null,
+            reason: entry.reason || null,
+            before: entry.before ?? null,
+            after: entry.after ?? null,
+            ip: entry.ip || null,
+            user_agent: entry.userAgent || null
+          }).select(TABLE_SELECT).single()
+        );
+      },
+      async list({ limit = 50, offset = 0 } = {}) {
+        const { data, error, count } = await admin
+          .from('admin_audit_logs').select(TABLE_SELECT, { count: 'exact' })
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        if (error) throw fromDbError(error);
+        return { rows: data || [], total: count ?? 0 };
+      }
+    },
+
+    // -------------------------------------------------------------- sessions
+    sessions: {
+      async create(row) {
+        return query(admin.from('sessions').insert(row).select(TABLE_SELECT).single());
+      },
+      async byTokenHash(hash) {
+        const rows = await query(admin.from('sessions').select(TABLE_SELECT).eq('token_hash', hash).limit(1));
+        return rows?.[0] ?? null;
+      },
+      async update(id, patch) {
+        const rows = await query(admin.from('sessions').update(patch).eq('id', id).select(TABLE_SELECT));
+        return rows?.[0] ?? null;
+      },
+      async revoke(id) {
+        await admin.from('sessions').update({ revoked_at: new Date().toISOString() }).eq('id', id);
+      },
+      async revokeAllForUser(userId) {
+        await admin.from('sessions').update({ revoked_at: new Date().toISOString() })
+          .eq('user_id', userId).is('revoked_at', null);
+      },
+      async listForUser(userId, { limit = 50 } = {}) {
+        const rows = await query(
+          admin.from('sessions').select('id,user_id,created_at,last_used_at,expires_at,revoked_at,ip,user_agent')
+            .eq('user_id', userId).is('revoked_at', null)
+            .order('created_at', { ascending: false }).limit(limit)
+        );
+        return { rows: rows || [] };
+      },
+      async deleteExpired() {
+        await admin.from('sessions').delete().lt('expires_at', new Date().toISOString());
+      }
+    },
+
+    // ----------------------------------------------------------- rate limits
+    rateLimit: {
+      async hit(key, limit, windowSeconds) {
+        const data = await rpc('rpc_rate_limit_hit', {
+          p_key: key,
+          p_limit: limit,
+          p_window_seconds: windowSeconds
+        });
+        return {
+          allowed: data.allowed,
+          limit: data.limit,
+          remaining: data.remaining,
+          count: data.count,
+          resetAt: new Date(data.reset_at).getTime()
+        };
+      }
+    },
+
+    // ------------------------------------------------------------- job leases
+    jobs: {
+      async acquire(name, owner, leaseSeconds) {
+        const data = await rpc('rpc_acquire_job_lease', {
+          p_name: name,
+          p_owner: owner,
+          p_lease_seconds: leaseSeconds
+        });
+        return data === true;
+      },
+      async release(name, owner) {
+        await rpc('rpc_release_job_lease', { p_name: name, p_owner: owner });
+      }
+    },
+
+    // -------------------------------------------------------------- webhooks
+    webhooks: {
+      async record(deliveryId, eventType, payload) {
+        return rpc('rpc_record_webhook_event', {
+          p_delivery_id: deliveryId,
+          p_event_type: eventType,
+          p_payload: payload
+        });
+      },
+      async markProcessed(deliveryId, error = null) {
+        await admin.from('supplier_webhook_events')
+          .update({ processed_at: new Date().toISOString(), error })
+          .eq('delivery_id', deliveryId);
+      }
+    },
+
+    // ------------------------------------------------------------- aggregates
+    async publicSummary() {
+      return rpc('rpc_public_summary');
+    },
+    async dashboard(adminId) {
+      return rpc('rpc_admin_dashboard', { p_admin_id: adminId });
+    },
+
+    async close() {
+      // supabase-js keeps no persistent socket pool we must close explicitly.
+      logger?.debug?.('supabase client released');
+    }
+  };
+
+  return db;
+}

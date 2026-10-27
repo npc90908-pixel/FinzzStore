@@ -1,0 +1,46 @@
+{
+  "name": "finzz-store",
+  "version": "2.0.0",
+  "private": true,
+  "description": "FINZZ Store v2 \u2014 SaaS platform for virtual numbers (nokos), wallet, deposits and OTP delivery.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test --test-reporter=spec --test-concurrency=1 tests/unit.test.js tests/api.test.js tests/ui.test.js tests/resilience.test.js",
+    "test:sql": "node --test --test-reporter=spec tests/sql.test.js",
+    "test:all": "npm run check && npm test && npm run test:sql",
+    "check": "node scripts/check.mjs",
+    "audit": "npm audit --audit-level=high",
+    "db:verify": "node scripts/verify-db.mjs",
+    "db:seed-dev": "node scripts/seed-dev.mjs",
+    "db:doctor": "node scripts/db-doctor.mjs",
+    "db:migrate": "node scripts/run-migration.mjs",
+    "db:migrate:status": "node scripts/run-migration.mjs --status",
+    "db:migrate:dry": "node scripts/run-migration.mjs --dry-run",
+    "db:bootstrap": "node scripts/run-migration.mjs --bootstrap",
+    "db:baseline": "node scripts/run-migration.mjs --baseline",
+    "deploy": "./deploy.sh",
+    "deploy:preflight": "./deploy.sh --preflight"
+  },
+  "dependencies": {
+    "argon2": "^0.45.1",
+    "nodemailer": "^10.2.1",
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.14"
+  },
+  "keywords": [
+    "nokos",
+    "virtual-number",
+    "otp",
+    "supabase",
+    "node-native"
+  ],
+  "license": "UNLICENSED"
+}

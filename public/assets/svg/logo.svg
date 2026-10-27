@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="FINZZ Store">
+  <defs>
+    <linearGradient id="finzz-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d8bff"/>
+      <stop offset="1" stop-color="#22d3a6"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#finzz-bg)"/>
+  <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#0b0d12"/>
+  <circle cx="34.5" cy="31.5" r="2.4" fill="#0b0d12" opacity="0.75"/>
+</svg>

@@ -1,0 +1,74 @@
+# ============================================================================
+# Deploy produksi dari GitHub.
+#
+# Kenapa migrasi ada di sini: kode baru di atas skema lama = 500 di produksi.
+# Urutannya sengaja: migrasi dulu, verifikasi skema, baru deploy, lalu
+# verifikasi runtime. Sama persis dengan ./deploy.sh.
+#
+# Rahasia yang harus dibuat di GitHub -> Settings -> Secrets:
+#   VERCEL_TOKEN        token Vercel (scope project finzzstore)
+#   VERCEL_ORG_ID       team_BOLzu0FwElfirJfuk38cIl7S  (atau id team Anda)
+#   VERCEL_PROJECT_ID   prj_4DpvuoYYo6ceyeeZGpkyJPVmNvDE
+#   DATABASE_URL_MIGRATE  connection string sesi (port 5432), BUKAN 6543
+#   DATABASE_SSL        require | no-verify | disable
+#   CRON_SECRET         untuk memicu POST /api/cron/catalog sebagai bukti
+#   PRODUCTION_URL      https://finzzstore.nightvale.xyz
+# ============================================================================
+name: Deploy production
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Static checks + tests
+        run: |
+          npm run check
+          npm test
+
+      - name: Migrate database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATE }}
+          DATABASE_SSL: ${{ secrets.DATABASE_SSL }}
+        run: npm run db:migrate
+
+      - name: Verify schema
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATE }}
+          DATABASE_SSL: ${{ secrets.DATABASE_SSL }}
+        run: npm run db:verify
+
+      - name: Deploy to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes vercel@latest deploy --prod --yes --token "$VERCEL_TOKEN"
+
+      - name: Verify runtime
+        env:
+          FINZZ_CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+        run: |
+          sleep 10
+          curl -s -o /dev/null -w '%{http_code}\n' -X POST "$PRODUCTION_URL/api/cron/catalog" \
+            -H "Authorization: Bearer $FINZZ_CRON_SECRET"
+          node scripts/verify-production.mjs "$PRODUCTION_URL"
