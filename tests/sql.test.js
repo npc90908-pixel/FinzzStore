@@ -50,6 +50,11 @@ after(async () => {
 // SCHEMA
 // ---------------------------------------------------------------------------
 test('schema, policies and functions apply cleanly and are re-runnable', async () => {
+  // Simulate the old seeded minimum, then verify migration 010 lowers that
+  // default to Rp1.000 without depending on the fresh-schema seed.
+  await db.query(`update public.app_settings
+    set value = jsonb_set(value, '{min_amount}', '10000'::jsonb, true)
+    where key = 'deposit_policy'`);
   await applySqlFiles(db); // second application must not fail
   const { rows } = await db.query(`
     select
@@ -71,8 +76,38 @@ test('schema, policies and functions apply cleanly and are re-runnable', async (
   assert.equal(oauth[0].password_auth_flag, true);
   assert.equal(oauth[0].rls_enabled, true);
 
-  const { rows: settings } = await db.query('select count(*)::int as n from public.app_settings');
+  const { rows: settings } = await db.query(`
+    select count(*)::int as n,
+      (select (value->>'min_amount')::numeric from public.app_settings where key = 'deposit_policy') as min_topup
+    from public.app_settings
+  `);
   assert.ok(settings[0].n >= 6, 'default settings inserted');
+  assert.equal(Number(settings[0].min_topup), 1000, 'the legacy seeded default migrates to IDR 1,000');
+
+  await db.query(`update public.app_settings
+    set value = jsonb_set(
+      jsonb_set(value, '{min_amount}', '25000'::jsonb, true),
+      '{max_amount}', '100000'::jsonb, true
+    )
+    where key = 'deposit_policy'`);
+  await applySqlFiles(db);
+  const { rows: retained } = await db.query(`
+    select value->>'min_amount' as min_amount, value->>'max_amount' as max_amount
+    from public.app_settings where key = 'deposit_policy'
+  `);
+  assert.equal(Number(retained[0].min_amount), 25000, 'operator-configured minimum above Rp1.000 is retained');
+  assert.equal(Number(retained[0].max_amount), 100000, 'operator-configured maximum is retained when valid');
+
+  await db.query(`update public.app_settings
+    set value = jsonb_set(value, '{max_amount}', '1000'::jsonb, true)
+    where key = 'deposit_policy'`);
+  await applySqlFiles(db);
+  const { rows: correctedMaximum } = await db.query(`
+    select value->>'min_amount' as min_amount, value->>'max_amount' as max_amount
+    from public.app_settings where key = 'deposit_policy'
+  `);
+  assert.equal(Number(correctedMaximum[0].min_amount), 25000);
+  assert.equal(Number(correctedMaximum[0].max_amount), 25000, 'maximum changes only when below the effective minimum');
 });
 
 test('registration creates profile + wallet with role=user', async () => {
@@ -460,26 +495,26 @@ test('deposit lifecycle: minimum enforced, approved once, double approval blocke
   assert.ok(svc);
 
   await expectDbError(
-    () => db.query(`select public.rpc_create_deposit($1, 5000, 'deposits/x.png','image/png',1024,repeat('a',64),null,10000,5000000,3)`, [user]),
+    () => db.query(`select public.rpc_create_deposit($1, 999, 'deposits/x.png','image/png',1024,repeat('a',64),null,100,5000000,3)`, [user]),
     'DEPOSIT_BELOW_MINIMUM'
   );
 
   const created = await db.query(
-    `select public.rpc_create_deposit($1, 25000, 'deposits/x.png','image/png',1024,repeat('a',64),'top up',10000,5000000,3) as r`,
+    `select public.rpc_create_deposit($1, 1000, 'deposits/x.png','image/png',1024,repeat('a',64),'top up',100,5000000,3) as r`,
     [user]);
   const depositId = created.rows[0].r.deposit.id;
   assert.equal(created.rows[0].r.deposit.status, 'pending');
 
   const approved = await db.query(
-    `select public.rpc_approve_deposit($1,$2,25000,'verified',null,null) as r`, [depositId, adminId]);
-  assert.equal(Number(approved.rows[0].r.balance), 25000);
-  assert.equal(await walletBalance(db, user), 25000);
+    `select public.rpc_approve_deposit($1,$2,1000,'verified',null,null) as r`, [depositId, adminId]);
+  assert.equal(Number(approved.rows[0].r.balance), 1000);
+  assert.equal(await walletBalance(db, user), 1000, 'approved amount is credited to the wallet');
 
   await expectDbError(
-    () => db.query(`select public.rpc_approve_deposit($1,$2,25000,'again',null,null)`, [depositId, adminId]),
+    () => db.query(`select public.rpc_approve_deposit($1,$2,1000,'again',null,null)`, [depositId, adminId]),
     'DEPOSIT_ALREADY_REVIEWED'
   );
-  assert.equal(await walletBalance(db, user), 25000, 'no double credit');
+  assert.equal(await walletBalance(db, user), 1000, 'no double credit');
 
   const { rows } = await db.query(`select count(*)::int n from public.wallet_transactions
     where user_id = $1 and type = 'deposit'`, [user]);

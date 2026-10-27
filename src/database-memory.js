@@ -12,6 +12,7 @@
 // ============================================================================
 import { randomUUID, createHash } from 'node:crypto';
 import { AppError, appErrorFromCode } from './errors.js';
+import { MINIMUM_TOPUP_AMOUNT } from './deposit-policy.js';
 
 const nowIso = () => new Date().toISOString();
 const daysFromNow = (n) => new Date(Date.now() + n * 86400000).toISOString();
@@ -27,7 +28,7 @@ const DEFAULT_SETTINGS = {
     is_public: true
   },
   deposit_policy: {
-    min_amount: 10000,
+    min_amount: MINIMUM_TOPUP_AMOUNT,
     max_amount: 5000000,
     instructions:
       'Transfer ke rekening resmi yang tertera, lalu unggah bukti transfer. Deposit diproses manual oleh admin maksimal 1x24 jam pada hari kerja.',
@@ -1182,7 +1183,8 @@ export function createMemoryDatabase({ logger } = {}) {
       async create(params) {
         const { userId, amount, proofPath, proofMime, proofSize, proofSha256, note, minAmount, maxAmount, maxPending = 3 } = params;
         if (!Number.isFinite(amount) || amount <= 0) throw appErrorFromCode('INVALID_AMOUNT');
-        if (amount < minAmount) throw appErrorFromCode('DEPOSIT_BELOW_MINIMUM');
+        const effectiveMinimum = Math.max(MINIMUM_TOPUP_AMOUNT, Number(minAmount) || MINIMUM_TOPUP_AMOUNT);
+        if (amount < effectiveMinimum) throw appErrorFromCode('DEPOSIT_BELOW_MINIMUM');
         if (amount > maxAmount) throw appErrorFromCode('DEPOSIT_ABOVE_MAXIMUM');
         if (!proofPath || !proofMime || !proofSize) throw appErrorFromCode('PROOF_REQUIRED');
         if (!['image/png', 'image/jpeg', 'image/webp', 'application/pdf'].includes(proofMime)) {

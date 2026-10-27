@@ -145,7 +145,7 @@ function baseRoutes(extra = []) {
       body: {
         settings: {
           store_profile: { name: 'FINZZ Store', tagline: 'Nomor virtual', support_email: 'support@finzz.store', support_whatsapp: '', support_telegram: '' },
-          deposit_policy: { min_amount: 10000, max_amount: 5000000, instructions: 'Transfer', bank_accounts: [{ bank_name: 'BCA', account_number: '123', account_holder: 'PT FINZZ' }], expiry_hours: 24 },
+          deposit_policy: { min_amount: 1000, max_amount: 5000000, instructions: 'Transfer', bank_accounts: [{ bank_name: 'BCA', account_number: '123', account_holder: 'PT FINZZ' }], expiry_hours: 24 },
           pricing_policy: { default_markup_bps: 1500, tax_bps: 0, tax_label: 'PPN' },
           operations: { sales_open: true, maintenance_message: '', order_poll_interval_ms: 4000, server_poll_interval_ms: 15000, order_expiry_seconds: 1260, max_active_orders_per_user: 5 },
           refund_policy: { summary: 'Refund bila OTP tidak diterima.' },

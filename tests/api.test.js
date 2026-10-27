@@ -719,8 +719,15 @@ test('deposits are credited once after approval and cannot be re-approved', asyn
   const client = h.client();
   const { profile } = await registerUser(h, client, { email: email('depositor') });
 
+  const tooSmall = await client.post('/api/deposits', {
+    amount: 999,
+    proof: `data:image/png;base64,${PNG_1X1}`
+  });
+  assert.equal(tooSmall.status, 400);
+  assert.equal(tooSmall.json.error.code, 'DEPOSIT_BELOW_MINIMUM');
+
   const created = await client.post('/api/deposits', {
-    amount: 25_000,
+    amount: 1_000,
     proof: `data:image/png;base64,${PNG_1X1}`,
     note: 'Transfer BCA'
   });
@@ -738,12 +745,12 @@ test('deposits are credited once after approval and cannot be re-approved', asyn
 
   const approved = await admin.client.post(`/api/admin/deposits/${created.json.deposit.id}/approve`, { note: 'Bukti valid' });
   assert.equal(approved.status, 200);
-  assert.equal(await walletBalance(client), 25_000);
+  assert.equal(await walletBalance(client), 1_000, 'manual approval credits the requested amount by default');
 
   const twice = await admin.client.post(`/api/admin/deposits/${created.json.deposit.id}/approve`, { note: 'Ulang' });
   assert.equal(twice.status, 409);
   assert.equal(twice.json.error.code, 'DEPOSIT_ALREADY_REVIEWED');
-  assert.equal(await walletBalance(client), 25_000);
+  assert.equal(await walletBalance(client), 1_000);
 });
 
 test('a rejected deposit never credits and requires a reason', async () => {

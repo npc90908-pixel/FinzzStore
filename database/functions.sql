@@ -783,7 +783,7 @@ create or replace function public.rpc_create_deposit(
   p_proof_size  integer,
   p_proof_sha256 text,
   p_user_note   text default null,
-  p_min_amount  numeric default 10000,
+  p_min_amount  numeric default 1000,
   p_max_amount  numeric default 5000000,
   p_max_pending integer default 3
 )
@@ -795,13 +795,14 @@ as $$
 declare
   v_deposit public.deposits;
   v_pending integer;
+  v_min_amount numeric := greatest(coalesce(p_min_amount, 1000), 1000);
 begin
   if p_amount is null or p_amount <= 0 then
     raise exception using errcode = 'P0001', message = 'INVALID_AMOUNT';
   end if;
-  if p_amount < p_min_amount then
+  if p_amount < v_min_amount then
     raise exception using errcode = 'P0001', message = 'DEPOSIT_BELOW_MINIMUM',
-      detail = format('minimum deposit is %s', p_min_amount);
+      detail = format('minimum deposit is %s', v_min_amount);
   end if;
   if p_amount > p_max_amount then
     raise exception using errcode = 'P0001', message = 'DEPOSIT_ABOVE_MAXIMUM',

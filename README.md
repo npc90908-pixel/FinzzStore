@@ -244,7 +244,10 @@ idempotency keys and `SECURITY DEFINER` + `search_path` hardening. The ledger
 `src/money.js` is integer-only — no floating-point money math anywhere.
 
 ### Deposits
-Manual only. Proof uploads are validated by magic bytes, size-limited, renamed
+Manual only; the minimum top-up is Rp1.000 and is enforced by the API and the
+PostgreSQL RPC, not only by the form. A manual approval credits the requested
+amount by default; an explicit admin adjustment is stored separately in
+`approved_amount`. Proof uploads are validated by magic bytes, size-limited, renamed
 with a UUID and written outside the web root (`UPLOAD_DIR`, mode 0600). Only an
 admin can read a proof (`/api/admin/deposits/:id/proof`). Approval credits the
 wallet exactly once (`409 DEPOSIT_ALREADY_REVIEWED` afterwards), rejection needs

@@ -24,6 +24,7 @@ import { createMockSupplier } from '../src/supplier-mock.js';
 import { createSupplierClient } from '../src/supplier.js';
 import { createCatalogService } from '../src/catalog.js';
 import { createOrderService } from '../src/orders.js';
+import { MINIMUM_TOPUP_AMOUNT, normalizeDepositPolicy } from '../src/deposit-policy.js';
 import { PAGES } from '../src/pages.js';
 import { renderDocument } from '../src/render.js';
 import { createLogger } from '../src/logging.js';
@@ -43,6 +44,14 @@ async function walk(dir, filter, out = []) {
   }
   return out;
 }
+
+// -------------------------------------------------------------- deposits -----
+test('deposit policy enforces a Rp1,000 minimum while retaining higher configured limits', () => {
+  assert.equal(MINIMUM_TOPUP_AMOUNT, 1000);
+  assert.equal(normalizeDepositPolicy({ min_amount: 999 }).min_amount, 1000);
+  assert.equal(normalizeDepositPolicy({ min_amount: 1000 }).min_amount, 1000);
+  assert.equal(normalizeDepositPolicy({ min_amount: 10000 }).min_amount, 10000);
+});
 
 // ---------------------------------------------------------------- money -----
 test('money: parseRupiah accepts integer amounts and rejects fractions', () => {
