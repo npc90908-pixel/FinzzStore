@@ -352,6 +352,79 @@ test('pages degrade gracefully when the API fails', async () => {
   }
 });
 
+test('new marketing pages render their content and the help search filters', async () => {
+  setupDom();
+  const { createApi } = await import('../public/js/api.js');
+  const fetcher = installFetch(baseRoutes());
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+  try {
+    const api = createApi({ getCsrfToken: () => 'csrf-token', onUnauthorized: () => {} });
+
+    // -------------------------------------------------------------- about
+    {
+      const ctx = makeCtx({ api, user: null, pathname: '/tentang' });
+      const rendered = await (await page('tentang'))(ctx);
+      const html = rendered.node.outerHTML;
+      assert.match(html, /Tentang/, 'about page renders its eyebrow');
+      assert.match(html, /Argon2id|ledger|refund/i, 'about page lists real product principles');
+      rendered.cleanup?.();
+    }
+
+    // --------------------------------------------------------------- help
+    {
+      const ctx = makeCtx({ api, user: null, pathname: '/bantuan' });
+      const rendered = await (await page('bantuan'))(ctx);
+      const root = rendered.node;
+      const html = root.outerHTML;
+      assert.match(html, /Pusat bantuan/);
+      const searchInput = root.querySelector('input[type="search"]');
+      assert.ok(searchInput, 'help centre exposes a search box');
+
+      // A nonsense query hides every accordion item and shows the empty state.
+      searchInput.value = 'zzz-tidak-cocok';
+      searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await settle();
+      const visibleItems = [...root.querySelectorAll('.accordion__item')].filter((n) => !n.classList.contains('hidden'));
+      assert.equal(visibleItems.length, 0, 'non-matching questions are hidden');
+      assert.match(root.outerHTML, /Tidak ada hasil yang cocok/, 'an explicit empty state is shown');
+
+      // A real keyword brings matching items back.
+      searchInput.value = 'refund';
+      searchInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await settle();
+      const matched = [...root.querySelectorAll('.accordion__item')].filter((n) => !n.classList.contains('hidden'));
+      assert.ok(matched.length >= 1, 'refund questions match the keyword');
+      rendered.cleanup?.();
+    }
+
+    // ----------------------------------------------------------- security
+    {
+      const ctx = makeCtx({ api, user: null, pathname: '/keamanan' });
+      const rendered = await (await page('keamanan'))(ctx);
+      const html = rendered.node.outerHTML;
+      assert.match(html, /Keamanan/);
+      assert.match(html, /Argon2id/, 'the security page names the real password hasher');
+      assert.match(html, /Row Level Security/i, 'the Postgres RLS control is described');
+      rendered.cleanup?.();
+    }
+
+    // ------------------------------------------------------------ contact
+    {
+      const ctx = makeCtx({ api, user: null, pathname: '/kontak' });
+      const rendered = await (await page('kontak'))(ctx);
+      const html = rendered.node.outerHTML;
+      assert.match(html, /Kontak/);
+      // The fixture publishes support@finzz.store, so the email card must appear.
+      assert.match(html, /support@finzz\.store/, 'configured support channels are rendered');
+      assert.ok(!/\+62\d{8,}/.test(html), 'no invented phone numbers on the contact page');
+      rendered.cleanup?.();
+    }
+  } finally {
+    fetcher.restore();
+  }
+});
+
 test('main.js boots, routes and mounts a page from the server state', async () => {
   const { window } = setupDom({
     pathname: '/dashboard',

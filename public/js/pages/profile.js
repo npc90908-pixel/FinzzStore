@@ -1,7 +1,7 @@
 // ============================================================================
 // PROFILE — personal data, password, session security.
 // ============================================================================
-import { el, Button, Badge, Card, Input, Skeleton, Alert, toast, runWithLoading, fieldError, clearFormErrors, KeyValue, Modal } from '../ui.js';
+import { el, Button, Badge, Card, Input, Skeleton, Alert, toast, runWithLoading, fieldError, clearFormErrors, KeyValue, Modal, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { ApiError } from '../api.js';
@@ -11,13 +11,14 @@ export default async function profilePage(ctx) {
   const { api, store, layout, navigate } = ctx;
   const area = el('div', { class: 'grid grid--sidebar' }, new Skeleton({ card: true }), new Skeleton({ card: true }));
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: 'Profil & keamanan' }),
-        el('p', { class: 'page__subtitle', text: 'Kelola data profil, password, dan sesi yang aktif pada akun Anda.' })
-      )
-    ),
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Akun',
+      iconName: 'user',
+      tone: 'violet',
+      title: 'Profil & keamanan',
+      subtitle: 'Kelola data profil, password, dan sesi yang aktif pada akun Anda.'
+    }),
     area
   );
 

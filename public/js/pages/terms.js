@@ -2,6 +2,7 @@
 // TERMS OF SERVICE — static legal copy, rendered client-side.
 // ============================================================================
 import { el } from '../ui.js';
+import { icon } from '../icons.js';
 
 const SECTIONS = [
   {
@@ -64,18 +65,23 @@ const SECTIONS = [
 
 export default async function terms(ctx) {
   const { layout } = ctx;
-  const page = el('div', { class: 'page page--narrow' },
+  const page = el('div', { class: 'page page--narrow animate-rise' },
     el('div', { class: 'page__head' },
       el('div', {},
-        el('h1', { class: 'page__title', text: 'Syarat & Ketentuan' }),
+        el('span', { class: 'eyebrow' }, el('span', { class: 'eyebrow__dot' }), el('span', { text: 'Dokumen legal' })),
+        el('div', { class: 'row', style: { gap: '12px', marginTop: '14px' } },
+          el('span', { class: 'feature-tile feature-tile--lg' }, icon('book', { size: 22 })),
+          el('h1', { class: 'page__title', text: 'Syarat & Ketentuan' })),
         el('p', { class: 'page__subtitle', text: 'Ketentuan penggunaan layanan FINZZ Store. Terakhir diperbarui: Januari 2026.' })
       )
     ),
     el('article', { class: 'prose' },
       SECTIONS.map((section) =>
-        el('section', {},
-          el('h2', { text: section.title }),
-          section.body.map((paragraph) => el('p', { text: paragraph }))
+        el('section', { class: 'card' },
+          el('div', { class: 'card__body' },
+            el('h2', { text: section.title }),
+            section.body.map((paragraph) => el('p', { text: paragraph }))
+          )
         )
       ),
       el('p', { class: 'text-sm text-dim', text: 'Pertanyaan mengenai ketentuan ini dapat dikirim ke alamat dukungan yang tercantum di footer.' })

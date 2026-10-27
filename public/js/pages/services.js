@@ -4,7 +4,7 @@
 // the wallet inside one transaction. The idempotency key is created when the
 // confirmation modal opens and reused if the user retries.
 // ============================================================================
-import { el, Button, Badge, Card, Skeleton, EmptyState, Modal, Alert, toast } from '../ui.js';
+import { el, Button, Badge, Card, Skeleton, EmptyState, Modal, Alert, toast, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { ApiError, newIdempotencyKey } from '../api.js';
@@ -72,14 +72,14 @@ export default async function services(ctx) {
   const isFiltering = () =>
     filters.query.trim() !== '' || filters.country !== 'all' || filters.maxPrice !== 'all' || !filters.availableOnly;
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: 'Beli nomor virtual' }),
-        el('p', { class: 'page__subtitle', text: 'Pilih aplikasi dan negara. Harga diambil langsung dari katalog supplier dan dikonfirmasi ulang saat order dibuat.' })
-      ),
-      Button({ variant: 'outline', iconName: 'wallet', children: 'Isi saldo', onClick: () => navigate('/wallet') })
-    ),
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Katalog',
+      iconName: 'grid',
+      title: 'Beli nomor virtual',
+      subtitle: 'Pilih aplikasi dan negara. Harga diambil langsung dari katalog supplier dan dikonfirmasi ulang saat order dibuat.',
+      actions: Button({ variant: 'outline', iconName: 'wallet', children: 'Isi saldo', onClick: () => navigate('/wallet') })
+    }),
     metaRow,
     filterBar,
     appTabs,

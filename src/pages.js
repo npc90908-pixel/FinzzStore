@@ -123,6 +123,34 @@ export const PAGES = Object.freeze({
     description: 'Kebijakan privasi dan penanganan data FINZZ Store.',
     requiresAuth: false,
     nav: null
+  },
+  '/tentang': {
+    key: 'tentang',
+    title: 'Tentang — FINZZ Store',
+    description: 'Misi, prinsip produk, dan alur kerja FINZZ Store untuk nomor virtual.',
+    requiresAuth: false,
+    nav: null
+  },
+  '/bantuan': {
+    key: 'bantuan',
+    title: 'Pusat Bantuan — FINZZ Store',
+    description: 'Jawaban atas pertanyaan seputar akun, order, OTP, saldo, deposit, dan refund.',
+    requiresAuth: false,
+    nav: null
+  },
+  '/keamanan': {
+    key: 'keamanan',
+    title: 'Keamanan — FINZZ Store',
+    description: 'Kontrol keamanan FINZZ Store: Argon2id, sesi HttpOnly, CSRF, RLS PostgreSQL, dan ledger.',
+    requiresAuth: false,
+    nav: null
+  },
+  '/kontak': {
+    key: 'kontak',
+    title: 'Kontak — FINZZ Store',
+    description: 'Kanal dukungan FINZZ Store: email, WhatsApp, dan Telegram bila tersedia.',
+    requiresAuth: false,
+    nav: null
   }
 });
 

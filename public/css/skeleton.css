@@ -1,33 +1,26 @@
 /* ============================================================================
-   FINZZ STORE — SKELETON LOADERS
+   FINZZ STORE — SKELETON LOADERS (v3)
    ========================================================================== */
 
 .skeleton {
   position: relative;
-  background: var(--surface-2);
+  background: linear-gradient(100deg, var(--surface-2) 40%, var(--surface-3) 50%, var(--surface-2) 60%);
+  background-size: 200% 100%;
   border-radius: var(--radius-sm);
   overflow: hidden;
   min-height: 12px;
-}
-.skeleton::after {
-  content: "";
-  position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
-  transform: translateX(-100%);
-  animation: skeleton-sweep 1.4s var(--ease-in-out) infinite;
-}
-[data-theme="light"] .skeleton::after {
-  background: linear-gradient(90deg, transparent, rgba(16, 23, 40, 0.06), transparent);
+  animation: skeleton-shimmer 1.5s var(--ease-in-out) infinite;
 }
 
-@keyframes skeleton-sweep {
-  100% { transform: translateX(100%); }
+@keyframes skeleton-shimmer {
+  from { background-position: 180% 0; }
+  to { background-position: -20% 0; }
 }
 
 .skeleton-text { height: 12px; margin-bottom: 8px; }
 .skeleton-text--sm { width: 40%; }
 .skeleton-text--lg { height: 18px; width: 60%; }
-.skeleton-block { height: 96px; border-radius: var(--radius-md); }
+.skeleton-block { height: 96px; border-radius: var(--radius-lg); }
 .skeleton-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -36,9 +29,9 @@
   display: flex; flex-direction: column; gap: var(--space-3);
 }
 .skeleton-row { display: flex; gap: var(--space-3); align-items: center; }
-.skeleton-circle { width: 36px; height: 36px; border-radius: 50%; }
+.skeleton-circle { width: 38px; height: 38px; border-radius: 50%; }
 .skeleton-table { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
 
 @media (prefers-reduced-motion: reduce) {
-  .skeleton::after { animation: none; }
+  .skeleton { animation: none; }
 }

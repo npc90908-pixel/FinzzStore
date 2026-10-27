@@ -237,12 +237,15 @@ operations, refund policy, legal versions, supplier). Every action is
 re-authorized server-side and written to `admin_audit_logs`.
 
 ### Frontend
-14 pages rendered client-side from a server HTML shell (per-request CSP nonce,
-JSON boot state, no `.html` files anywhere):
+22 page modules across 20 registered routes, rendered client-side from a server
+HTML shell (per-request CSP nonce, JSON boot state, no `.html` files anywhere):
 
 `/` `/login` `/register` `/forgot-password` `/reset-password` `/verify-email`
-`/dashboard` `/services` `/orders` `/wallet` `/profile` `/admin` `/terms`
-`/privacy` — plus client-side `not-found` (404) and `forbidden` (403) views.
+`/dashboard` `/services` `/orders` `/wallet` `/profile` `/admin`
+`/notifications` `/status` `/terms` `/privacy` `/tentang` `/bantuan`
+`/keamanan` `/kontak` — plus client-side `not-found` (404) and `forbidden`
+(403) views. The marketing pages `/tentang`, `/bantuan` (searchable FAQ),
+`/keamanan`, and `/kontak` are public and work without a session.
 
 Dark mode first, CSS variables, mobile-first layout with a slide-over sidebar and
 a bottom nav, `prefers-reduced-motion` respected, skeleton loading states,

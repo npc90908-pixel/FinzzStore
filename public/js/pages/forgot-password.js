@@ -16,6 +16,7 @@ export default async function forgotPassword(ctx) {
 
   form.append(
     el('div', { class: 'auth-card__head' },
+      el('span', { class: 'feature-tile feature-tile--lg feature-tile--violet auth-card__icon' }, icon('key', { size: 22 })),
       el('h1', { class: 'auth-card__title', text: 'Lupa password?' }),
       el('p', { class: 'auth-card__lead', text: 'Masukkan email akun Anda. Kami akan mengirim tautan untuk mengatur password baru.' })
     ),

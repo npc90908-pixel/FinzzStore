@@ -55,7 +55,21 @@ const PATHS = {
   smartphoneCheck: '<rect x="6.5" y="2.8" width="11" height="18.4" rx="2.6"/><path d="m9.8 11.5 1.8 1.8 3.2-3.6"/>',
   externalLink: '<path d="M14 4.5h5.5V10M19.5 4.5 11 13"/><path d="M17 14v4.5A1.5 1.5 0 0 1 15.5 20h-9A1.5 1.5 0 0 1 5 18.5v-9A1.5 1.5 0 0 1 6.5 8H11"/>',
   dot: '<circle cx="12" cy="12" r="3.6"/>',
-  wifiOff: '<path d="m3 3 18 18"/><path d="M8.5 15.5a5 5 0 0 1 7 0"/><path d="M5 12a10 10 0 0 1 3-2M19 12a10 10 0 0 0-4.5-2.4"/><circle cx="12" cy="19" r="1"/>'
+  wifiOff: '<path d="m3 3 18 18"/><path d="M8.5 15.5a5 5 0 0 1 7 0"/><path d="M5 12a10 10 0 0 1 3-2M19 12a10 10 0 0 0-4.5-2.4"/><circle cx="12" cy="19" r="1"/>',
+  headset: '<path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4" height="6" rx="1.6"/><rect x="17" y="13" width="4" height="6" rx="1.6"/><path d="M20 19a4 4 0 0 1-4 3h-3"/>',
+  send: '<path d="M21 3 10 14"/><path d="M21 3 14 21l-4-7-7-4z"/>',
+  rocket: '<path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2c.8-.8.8-2 0-3s-2.2-.8-3 0z"/><path d="M9 15l-3-3c1-5 4-8.5 9-9 .5 5-2.5 8-6 12z"/><circle cx="14.5" cy="9.5" r="1.6"/>',
+  fingerprint: '<path d="M12 4a8 8 0 0 0-8 8v3"/><path d="M20 12a8 8 0 0 0-2.5-5.8"/><path d="M8 12a4 4 0 0 1 8 0v2.5"/><path d="M12 12v4a8 8 0 0 0 1 4"/><path d="M8 16v-2"/><path d="M16 16.5V20"/>',
+  book: '<path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v16H7.5A2.5 2.5 0 0 0 5 20.5z"/><path d="M5 4.5V20"/>',
+  chat: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 20.5l1.4-4.6A8 8 0 1 1 21 12z"/><path d="M9 11.5h6M9 14.5h4"/>',
+  pin: '<path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/>',
+  banknote: '<rect x="3" y="6" width="18" height="12" rx="2.4"/><circle cx="12" cy="12" r="2.6"/><path d="M6.5 9.5v5M17.5 9.5v5"/>',
+  gauge: '<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 14l4-4"/>',
+  server: '<rect x="3.5" y="4.5" width="17" height="6.5" rx="2"/><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M7.5 7.8h.01M7.5 16.3h.01"/>',
+  bell: '<path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
+  heart: '<path d="M12 20s-7-4.6-9.2-9A4.8 4.8 0 0 1 12 6.4 4.8 4.8 0 0 1 21.2 11C19 15.4 12 20 12 20z"/>',
+  qr: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><path d="M13.5 13.5h3v3M20 16.5V20h-3.5"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.3a2.4 2.4 0 1 1 3.3 2.2c-.7.3-.9.8-.9 1.5"/><circle cx="12" cy="16.6" r="0.4" fill="currentColor"/>'
 };
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -86,11 +100,11 @@ export function icon(name, { size = 18, strokeWidth = 1.7, className = '', label
 
 export const BRAND_MARK_SVG = `<svg viewBox="0 0 48 48" width="34" height="34" role="img" aria-label="FINZZ Store">
   <defs><linearGradient id="fz-brand" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0" stop-color="#6d8bff"/><stop offset="1" stop-color="#22d3a6"/>
+    <stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#2ee6b6"/>
   </linearGradient></defs>
   <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#fz-brand)"/>
-  <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#0b0d12"/>
-  <circle cx="34.5" cy="31.5" r="2.4" fill="#0b0d12" opacity="0.75"/>
+  <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#06070d"/>
+  <circle cx="34.5" cy="31.5" r="2.4" fill="#06070d" opacity="0.75"/>
 </svg>`;
 
 export const iconNames = Object.keys(PATHS);

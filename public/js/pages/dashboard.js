@@ -1,7 +1,7 @@
 // ============================================================================
 // DASHBOARD — balance, active orders with live OTP, recent activity.
 // ============================================================================
-import { el, Button, Badge, Card, StatCard, Table, Skeleton, EmptyState, toast } from '../ui.js';
+import { el, Button, Badge, Card, StatCard, Table, Skeleton, EmptyState, toast, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { createOrderPoller } from '../poller.js';
@@ -21,17 +21,17 @@ export default async function dashboard(ctx) {
   const activeSection = el('div', {}, el('div', { class: 'skeleton skeleton-block' }));
   const recentSection = el('div', {}, el('div', { class: 'skeleton skeleton-block' }));
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: `Halo${user?.username ? `, ${user.username}` : ''}` }),
-        el('p', { class: 'page__subtitle', text: 'Ringkasan saldo, order aktif, dan kode OTP terbaru Anda.' })
-      ),
-      el('div', { class: 'row row--wrap' },
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Dashboard',
+      iconName: 'home',
+      title: `Halo${user?.username ? `, ${user.username}` : ''}`,
+      subtitle: 'Ringkasan saldo, order aktif, dan kode OTP terbaru Anda.',
+      actions: el('div', { class: 'row row--wrap' },
         Button({ variant: 'outline', iconName: 'wallet', children: 'Isi saldo', onClick: () => navigate('/wallet') }),
         Button({ variant: 'primary', iconName: 'plus', children: 'Beli nokos', onClick: () => navigate('/services') })
       )
-    ),
+    }),
     statsRow,
     el('section', { class: 'card' },
       el('header', { class: 'card__head' },

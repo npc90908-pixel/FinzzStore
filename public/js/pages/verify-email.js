@@ -163,6 +163,7 @@ export default async function verifyEmail(ctx) {
 
   card.append(
     el('div', { class: 'auth-card__head' },
+      el('span', { class: 'feature-tile feature-tile--lg feature-tile--info auth-card__icon' }, icon('mail', { size: 22 })),
       el('h1', { class: 'auth-card__title', text: 'Verifikasi email' }),
       el('p', { class: 'auth-card__lead', text: 'Masukkan 6 digit kode dari email Anda. Email tidak perlu diketik ulang.' })
     ),

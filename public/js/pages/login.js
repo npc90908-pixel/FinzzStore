@@ -28,6 +28,7 @@ export default async function login(ctx) {
 
   form.append(
     el('div', { class: 'auth-card__head' },
+      el('span', { class: 'feature-tile feature-tile--lg auth-card__icon' }, icon('shield', { size: 22 })),
       el('a', { class: 'brand', attrs: { href: '/' }, onClick: (e) => { e.preventDefault(); navigate('/'); } },
         icon('arrowRight', { size: 15 }), el('span', { text: 'Kembali ke beranda' })),
       el('h1', { class: 'auth-card__title', text: 'Masuk ke akun Anda' }),
@@ -112,7 +113,7 @@ export default async function login(ctx) {
 
   const side = el('aside', { class: 'auth-side' },
     el('div', { class: 'brand' },
-      el('span', { class: 'brand__mark', html: '<svg viewBox="0 0 48 48" width="34" height="34"><defs><linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d8bff"/><stop offset="1" stop-color="#22d3a6"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#lg1)"/><path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#0b0d12"/></svg>' }),
+      el('span', { class: 'brand__mark', html: '<svg viewBox="0 0 48 48" width="34" height="34"><defs><linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#2ee6b6"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#lg1)"/><path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#06070d"/></svg>' }),
       el('span', { class: 'brand__name', text: 'FINZZ' })
     ),
     el('p', { class: 'auth-side__quote', text: '“Satu akun untuk nomor virtual, saldo, dan seluruh riwayat OTP Anda.”' }),

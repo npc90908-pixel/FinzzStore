@@ -4,6 +4,7 @@
 // 32 random bytes, valid for 10 minutes and single-use.
 // ============================================================================
 import { el, Input, Button, Alert, runWithLoading, fieldError, clearFormErrors, toast } from '../ui.js';
+import { icon } from '../icons.js';
 import { ApiError } from '../api.js';
 
 function readToken(query) {
@@ -19,6 +20,7 @@ export default async function resetPassword(ctx) {
 
   if (!token) {
     form.append(
+      el('span', { class: 'feature-tile feature-tile--lg feature-tile--warning auth-card__icon' }, icon('alert', { size: 22 })),
       el('h1', { class: 'auth-card__title', text: 'Tautan reset tidak ditemukan' }),
       Alert({ tone: 'warning', title: 'Token tidak ada', children: 'Buka tautan dari email reset password Anda, atau minta tautan baru.' }),
       Button({ variant: 'primary', block: true, children: 'Minta tautan reset', onClick: () => navigate('/forgot-password') })
@@ -37,6 +39,7 @@ export default async function resetPassword(ctx) {
       MISSING: 'Tautan tidak lengkap.'
     }[inspection.reason] || 'Tautan tidak dapat digunakan.';
     form.append(
+      el('span', { class: 'feature-tile feature-tile--lg feature-tile--warning auth-card__icon' }, icon('alert', { size: 22 })),
       el('h1', { class: 'auth-card__title', text: 'Tautan tidak dapat dipakai' }),
       Alert({ tone: 'warning', title: 'Reset password', children: reasonText }),
       Button({ variant: 'primary', block: true, children: 'Minta tautan baru', onClick: () => navigate('/forgot-password') })
@@ -50,6 +53,7 @@ export default async function resetPassword(ctx) {
 
   form.append(
     el('div', { class: 'auth-card__head' },
+      el('span', { class: 'feature-tile feature-tile--lg auth-card__icon' }, icon('lock', { size: 22 })),
       el('h1', { class: 'auth-card__title', text: 'Atur password baru' }),
       el('p', { class: 'auth-card__lead', text: 'Setelah password diperbarui, semua sesi lain akan diakhiri.' })
     ),

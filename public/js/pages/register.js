@@ -30,6 +30,7 @@ export default async function register(ctx) {
 
   form.append(
     el('div', { class: 'auth-card__head' },
+      el('span', { class: 'feature-tile feature-tile--lg feature-tile--mint auth-card__icon' }, icon('users', { size: 22 })),
       el('a', { class: 'brand', attrs: { href: '/' }, onClick: (e) => { e.preventDefault(); navigate('/'); } },
         icon('arrowRight', { size: 15 }), el('span', { text: 'Kembali ke beranda' })),
       el('h1', { class: 'auth-card__title', text: 'Buat akun FINZZ Store' }),

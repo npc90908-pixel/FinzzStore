@@ -161,10 +161,13 @@ export default async function statusPage(ctx) {
 
   const node = el('div', {},
     layout.header({ variant: 'public' }),
-    el('div', { class: 'page page--narrow' },
+    el('div', { class: 'page page--narrow animate-rise' },
       el('div', { class: 'page__head' },
         el('div', {},
-          el('div', { class: 'row', style: { gap: '8px' } }, icon('activity', { size: 18 }), el('h1', { class: 'page__title', text: 'Status layanan' })),
+          el('span', { class: 'eyebrow' }, el('span', { class: 'eyebrow__dot' }), el('span', { text: 'Keterbukaan sistem' })),
+          el('div', { class: 'row', style: { gap: '12px', marginTop: '14px' } },
+            el('span', { class: 'feature-tile feature-tile--info feature-tile--lg' }, icon('activity', { size: 22 })),
+            el('h1', { class: 'page__title', text: 'Status layanan' })),
           el('p', { class: 'page__subtitle', text: 'Pemeriksaan langsung terhadap komponen yang benar-benar dipakai transaksi Anda.' })
         )
       ),
