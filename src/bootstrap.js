@@ -24,6 +24,7 @@ import { createReconciliationJob } from './jobs/reconciliation.js';
 import { createRouter } from './router.js';
 import { registerRoutes } from './routes/index.js';
 import { createApp } from './app.js';
+import { createExpressApp } from './express-app.js';
 import { createRateLimiter } from './security.js';
 import { mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -122,8 +123,9 @@ export async function createApplication({ env = process.env, logger, supplierOpt
   services.jobs = jobs;
 
   const handler = createApp({ config, logger, db, auth, services, router });
+  const expressApp = createExpressApp({ handler, logger });
 
-  return { config, db, services, jobs, router, handler, logger };
+  return { config, db, services, jobs, router, handler, expressApp, logger };
 }
 
 function deterministicUuid(seed) {

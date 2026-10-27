@@ -181,9 +181,13 @@ export default async function walletPage(ctx) {
         });
       }
 
-      const invoices = pendingGateways.map((pendingGateway) => pendingGateway.payment?.checkoutUrl
-          ? el('div', { class: 'stack' },
-              Alert({ tone: 'info', title: 'Invoice AstraPay menunggu pembayaran', children: 'Selesaikan pembayaran sebelum invoice kedaluwarsa. Nominal saldo tidak termasuk kode unik pembayaran.' }),
+      const invoices = pendingGateways.map((pendingGateway) => pendingGateway.payment?.qrisImage
+          ? el('div', { class: 'qris-payment stack' },
+              Alert({ tone: 'info', title: 'Invoice AstraPay menunggu pembayaran', children: 'Pindai QRIS ini dari aplikasi pembayaran Anda. Jangan tutup invoice sebelum status berubah menjadi lunas.' }),
+              el('div', { class: 'qris-payment__panel stack' },
+                el('img', { class: 'qris-payment__image', attrs: { src: pendingGateway.payment.qrisImage, alt: 'QRIS AstraPay untuk pembayaran FINZZ Store', width: '280', height: '280', loading: 'eager', decoding: 'async' } }),
+                el('span', { class: 'text-xs text-dim', text: `Invoice ${pendingGateway.payment.reference || pendingGateway.id}` })
+              ),
               el('div', { class: 'row row--between row--wrap' },
                 el('span', { class: 'text-sm', text: 'Saldo yang akan masuk' }),
                 el('span', { class: 'mono', text: formatRupiah(pendingGateway.amount) })
@@ -192,14 +196,19 @@ export default async function walletPage(ctx) {
                 el('span', { class: 'text-sm', text: 'Total yang harus dibayar' }),
                 el('span', { class: 'mono', text: formatRupiah(pendingGateway.payment.payAmount) })
               ),
-              el('a', {
+              pendingGateway.payment.feeAmount > 0 ? el('div', { class: 'row row--between row--wrap' },
+                el('span', { class: 'text-xs text-dim', text: 'Biaya gateway' }),
+                el('span', { class: 'mono text-xs', text: formatRupiah(pendingGateway.payment.feeAmount) })
+              ) : null,
+              pendingGateway.payment.expiresAt ? el('p', { class: 'text-xs text-dim', text: `Kedaluwarsa ${formatDate(pendingGateway.payment.expiresAt)}` }) : null,
+              el('p', { class: 'text-xs text-dim', text: 'Status diperbarui otomatis. Saldo hanya dikreditkan setelah server memverifikasi status final AstraPay dan mencegah kredit ganda.' }),
+              pendingGateway.payment.checkoutUrl ? el('a', {
                 class: 'btn btn--outline btn--block',
                 attrs: { href: pendingGateway.payment.checkoutUrl, target: '_blank', rel: 'noopener noreferrer' },
-                text: 'Buka halaman QRIS AstraPay'
-              }),
-              el('p', { class: 'text-xs text-dim', text: 'Saldo hanya dikreditkan setelah signature webhook dan status final AstraPay diverifikasi di server. Muat ulang halaman untuk melihat hasilnya.' })
+                text: 'QR tidak bisa dipindai? Buka halaman AstraPay'
+              }) : null
             )
-          : Alert({ tone: 'warning', title: 'Invoice sedang dikonfirmasi', children: 'Belum ada tautan pembayaran yang dapat ditampilkan. Jangan transfer ke tujuan lain untuk invoice ini; status akan ditutup otomatis jika tidak berhasil dibuat.' })
+          : Alert({ tone: 'warning', title: 'Invoice sedang dikonfirmasi', children: 'QRIS belum tersedia untuk invoice ini. Jangan transfer ke tujuan lain; sistem akan merekonsiliasi status invoice.' })
       );
 
       cards.push(Card({
@@ -282,6 +291,26 @@ export default async function walletPage(ctx) {
   }
 
   await load();
+
+  // Reconcile the visible wallet while an AstraPay invoice is pending. Polling
+  // reads only FINZZ's authenticated API; the browser never decides payment
+  // success and stops polling when the user navigates away or no invoice waits.
+  let pollBusy = false;
+  const paymentPoller = setInterval(async () => {
+    if (pollBusy) return;
+    if (!location.pathname.startsWith('/wallet')) { clearInterval(paymentPoller); return; }
+    if (!(state.wallet?.pendingGatewayCount > 0)) return;
+    pollBusy = true;
+    try {
+      const latest = await api.get(`/api/wallet?page=${state.page}`, { timeout: 8000, retries: 0 });
+      const oldPending = (state.wallet?.pendingDeposits || []).filter((d) => d.method === 'gateway' && d.status === 'pending').map((d) => d.id).sort().join(',');
+      const newPending = (latest.pendingDeposits || []).filter((d) => d.method === 'gateway' && d.status === 'pending').map((d) => d.id).sort().join(',');
+      if (latest.balance !== state.wallet?.balance || latest.pendingGatewayCount !== state.wallet?.pendingGatewayCount || oldPending !== newPending) {
+        await load();
+      }
+    } catch { /* transient polling failures do not interrupt wallet actions */ }
+    finally { pollBusy = false; }
+  }, 5000);
 
   return { node: shell, title: 'Saldo & Deposit — FINZZ Store' };
 }

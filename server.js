@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // ============================================================================
-// FINZZ STORE V2 — entry point.
-// Node.js 24, ES Modules, node:http only. See README.md for deployment.
+// FINZZ STORE V2 — Express.js entry point with EJS rendering.
+// Node.js 24, ES Modules. See README.md for deployment.
 // ============================================================================
 import { createServer } from 'node:http';
 import { ConfigError } from './src/config.js';
 import { createLogger } from './src/logging.js';
 import { createApplication } from './src/bootstrap.js';
+import { invokeExpressApp } from './src/express-app.js';
 import { loadOptionalEnvFile } from './src/env.js';
 
 let envFileError = null;
@@ -51,8 +52,8 @@ export default async function vercelHandler(req, res) {
     return;
   }
   try {
-    const { handler } = await getApp();
-    await handler(req, res);
+    const { expressApp } = await getApp();
+    await invokeExpressApp(expressApp, req, res);
   } catch (err) {
     createLogger().error('request failed', { error: err?.message });
     if (!res.headersSent) {
@@ -82,7 +83,7 @@ async function main() {
     throw err;
   }
 
-  const { config, db, services, jobs, handler } = app;
+  const { config, db, services, jobs, expressApp } = app;
   const bootLogger = logger.child({ env: config.nodeEnv, version: config.version });
 
   bootLogger.info('starting FINZZ Store', {
@@ -99,15 +100,7 @@ async function main() {
     );
   }
 
-  const server = createServer((req, res) => {
-    handler(req, res).catch((err) => {
-      bootLogger.error('fatal request handler error', { err });
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'Terjadi kesalahan pada server.' } }));
-      }
-    });
-  });
+  const server = createServer(expressApp);
 
   server.headersTimeout = 20000;
   server.requestTimeout = 30000;

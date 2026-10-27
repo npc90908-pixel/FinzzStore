@@ -998,7 +998,10 @@ export function createPgDatabase(config, { logger } = {}) {
       },
       async markProcessed(deliveryId, error = null) {
         await query(
-          'update public.supplier_webhook_events set processed_at = now(), error = $2 where delivery_id = $1',
+          `update public.supplier_webhook_events
+             set processed_at = case when $2::text is null then now() else null end,
+                 error = $2
+           where delivery_id = $1`,
           [deliveryId, error], { table: 'supplier_webhook_events' }
         );
       }

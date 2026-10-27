@@ -2,7 +2,7 @@
   "name": "finzz-store",
   "version": "2.0.0",
   "private": true,
-  "description": "FINZZ Store v2 \u2014 SaaS platform for virtual numbers (nokos), wallet, deposits and OTP delivery.",
+  "description": "FINZZ Store \u2014 Express.js + EJS server-rendered virtual number platform with PostgreSQL.",
   "type": "module",
   "engines": {
     "node": ">=24.0.0 <25"
@@ -30,7 +30,10 @@
   "dependencies": {
     "argon2": "^0.45.1",
     "nodemailer": "^10.2.1",
-    "pg": "8.16.3"
+    "pg": "8.16.3",
+    "express": "^5.1.0",
+    "ejs": "^3.1.10",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "linkedom": "^0.18.14"
@@ -40,7 +43,9 @@
     "virtual-number",
     "otp",
     "supabase",
-    "node-native"
+    "express",
+    "ejs",
+    "server-rendered"
   ],
   "license": "UNLICENSED"
 }

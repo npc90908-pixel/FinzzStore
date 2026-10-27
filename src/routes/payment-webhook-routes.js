@@ -78,7 +78,7 @@ export function registerPaymentWebhookRoutes({ router, services, logger }) {
       const webhookPayAmount = Number(event.pay_amount);
       if (String(event.reference) !== verified.reference
           || webhookBaseAmount !== verified.baseAmount
-          || webhookFee !== verified.feeAmount
+          || webhookFee !== verified.feeQris
           || webhookPayAmount !== verified.payAmount) {
         throw new AppError('PAYMENT_AMOUNT_MISMATCH', 'Nominal webhook tidak cocok dengan status AstraPay yang diverifikasi.', 409);
       }

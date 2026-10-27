@@ -287,6 +287,17 @@ test('TeleKos adapter uses only documented dynamic reads and preserves provider 
   });
   assert.deepEqual(await retrying.getServers(), []);
   assert.equal(retryCount, 2, 'a transient read receives one bounded retry');
+
+  const newestOtp = createSupplierClient(config, {
+    fetchImpl: async () => new Response(JSON.stringify({ data: {
+      id: 'TRX-OTP', status: 'received', otps: [
+        { id: 'old', code: '111111', received_at: '2026-10-27T10:00:00.000Z' },
+        { id: 'new', code: '222222', received_at: '2026-10-27T10:01:00.000Z' }
+      ]
+    } }), { status: 200, headers: { 'content-type': 'application/json' } })
+  });
+  const order = await newestOtp.getOrder('TRX-OTP');
+  assert.equal(order.otps[0].code, '222222', 'latest OTP is always first regardless of provider array order');
 });
 
 test('dynamic catalogue cache sorts sale prices and labels failed refresh data stale', async () => {
@@ -650,6 +661,7 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
   const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
   const paidAt = new Date().toISOString();
   const calls = [];
+  let qrisFee = 0;
   const fakeFetch = async (url, options) => {
     calls.push({ url: String(url), options });
     const isCreate = options.method === 'POST';
@@ -661,9 +673,9 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
         status: isCreate ? 'pending' : 'paid',
         base_amount: 1000,
         credit_amount: 1000,
-        fee_qris: 0,
+        fee_qris: qrisFee,
         service_fee: 0,
-        pay_amount: 1001,
+        pay_amount: 1007,
         checkout_url: 'https://gateway.astrapay.biz.id/pay/order-1',
         qris: '000201-test-payload',
         expires_at: expiresAt,
@@ -678,18 +690,34 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
     redirectUrl: 'https://finzz.test/wallet'
   });
   assert.equal(invoice.providerOrderId, 'order-1');
-  assert.equal(invoice.payAmount, 1001);
+  assert.equal(invoice.payAmount, 1007, 'gateway unique-code offset stays in the payable amount');
   assert.equal(invoice.feeAmount, 0);
+  assert.equal(invoice.feeQris, 0);
+  assert.equal(invoice.serviceFee, 0);
   assert.equal(calls[0].options.headers['x-api-key'], 'unit-test-api-key-not-real');
   assert.equal(calls[0].options.body.includes('1000'), true);
 
   const remote = await adapter.checkStatus('order-1');
   const paid = adapter.validatePaidOrder(remote, {
     providerOrderId: 'order-1', reference: 'FZ-UNIT-REF', amount: 1000,
-    payAmount: 1001, expiresAt
+    payAmount: 1007, expiresAt
   });
-  assert.equal(paid.payAmount, 1001);
+  assert.equal(paid.payAmount, 1007);
+  assert.equal(paid.feeAmount, 0);
+  assert.equal(paid.creditAmount, 1000);
   assert.equal(calls[1].options.method, 'GET');
+
+  qrisFee = 1;
+  await assert.rejects(() => adapter.createPayment({
+    reference: 'FZ-UNIT-REF', amount: 1000, expiresIn: 600,
+    webhookUrl: 'https://finzz.test/api/webhooks/astrapay',
+    redirectUrl: 'https://finzz.test/wallet'
+  }), (error) => error.code === 'PAYMENT_PROVIDER_CONTRACT_INVALID');
+  assert.throws(() => adapter.validatePaidOrder({ ...remote, fee_qris: 1 }, {
+    providerOrderId: 'order-1', reference: 'FZ-UNIT-REF', amount: 1000,
+    payAmount: 1007, expiresAt
+  }), (error) => error.code === 'PAYMENT_AMOUNT_MISMATCH');
+  qrisFee = 0;
 
   const rawBody = Buffer.from('{"event":"order.paid","reference":"FZ-UNIT-REF"}');
   const timestamp = String(Math.floor(Date.now() / 1000));

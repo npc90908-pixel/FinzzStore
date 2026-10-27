@@ -63,7 +63,7 @@ single-shot refunds, idempotency, transition matrix). It refuses to run when
 
 ```bash
 export PATH=/path/to/node24/bin:$PATH          # Node 24.x
-npm ci
+npm install # memperbarui lockfile setelah dependency berubah
 cp .env.example .env                           # opsional; simpan rahasia lokal di sini
 SUPPLIER_MODE=mock DEMO_MODE=true npm start    # http://localhost:3000
 ```
@@ -93,7 +93,7 @@ Useful scripts:
 | `npm test` | unit + API + UI tests (`node:test`) |
 | `npm run test:sql` | schema / RLS / RPC suite against local PostgreSQL |
 | `npm run test:all` | check + tests + SQL suite |
-| `npm run check` | static gates (syntax, no `.html`, no CJS, no framework, secrets) |
+| `npm run check` | static gates (syntax, no `.html`, no CJS, Express.js + EJS, secrets) |
 | `npm audit` | dependency audit (audit-level=high) |
 | `npm run db:verify` | verify a deployed database against the app contract |
 | `npm run db:seed-dev` | seed default settings, promote the first admin |
@@ -402,7 +402,7 @@ Refunds, deposit credits and debits are single-shot and idempotent.
 ## 7. Testing
 
 ```bash
-npm run check      # static gates (syntax, no .html, pure ESM, no framework, secrets)
+npm run check      # static gates (syntax, no .html, pure ESM, Express.js + EJS, secrets)
 npm test           # unit + API + UI + resilience suite (121 cases at this checkout)
 npm run test:sql   # SQL/RLS/RPC suite (45 cases; requires configured local PostgreSQL)
 npm audit          # dependency audit
@@ -508,3 +508,47 @@ runtime evidence and the deployment checklist.
 - **Icons are inline SVG components** (`public/js/icons.js`, `public/js/ui.js`)
   rather than an external sprite: no extra request, no cache-busting and nothing
   for CSP to whitelist. `public/assets/svg/logo.svg` doubles as the favicon.
+
+
+## Express.js + EJS migration (incremental)
+
+The HTTP entry point now runs through Express 5 and the server-rendered document
+shell is rendered from `views/layouts/document.ejs` with EJS. Existing route
+contracts and raw-body webhook handling are retained behind a compatibility
+adapter during migration; do not remove that adapter until each route family
+has been ported and its API/security tests pass. The EJS shell still hydrates
+existing progressive frontend modules under `public/js/`, so this change does
+not imply every UI screen has been rewritten as an EJS page.
+
+Runtime dependencies now include `express`, `ejs`, and `qrcode`. Run `npm install`
+once with registry access to regenerate `package-lock.json`, then commit the
+resulting lockfile. CI refreshes the lockfile before `npm ci` because the audit
+workspace could not reach the npm registry to resolve the new dependency tree.
+
+AstraPay wallet invoices render QRIS locally from the provider payload. The
+browser polls FINZZ's authenticated wallet API while a payment is pending; only
+server-side webhook verification/reconciliation can credit the wallet.
+
+### 3.2 TeleKos (live virtual-number supplier)
+
+Set `SUPPLIER_MODE=live`, `TELEKOS_API_KEY` and (if using callbacks)
+`TELEKOS_WEBHOOK_SECRET` in Vercel **Production** environment variables, then
+redeploy. `TELEKOS_BASE_URL` defaults to `https://telekos.id/v1`; do not add
+`/api` to that URL. The API key must remain server-side and must never be placed
+in `public/` or browser JavaScript.
+
+Configure the TeleKos webhook URL as `https://YOUR_PUBLIC_DOMAIN/api/webhooks/telekos`
+with the same signing secret. If no webhook secret is configured, the order
+poller must be enabled on a persistent Node deployment or an external scheduler
+must invoke the protected polling/reconciliation routes; Vercel's serverless
+runtime does not keep interval timers alive. Verify live connectivity from the
+admin supplier diagnostics (`/api/admin/supplier`) before making a real purchase.
+The adapter uses documented `/balance`, `/servers`, `/apps`, `/countries`,
+`/prices`, and `/orders` routes, requires an idempotency key for purchases, and
+keeps ambiguous timeouts pending for reconciliation rather than refunding or
+creating a second order blindly.
+
+For a Vercel + Supabase deployment, use the **Transaction Pooler** `DATABASE_URL`
+(port `6543`). The error `EMAXCONNSESSION` means the project's Session Pooler
+client limit has been exhausted; reducing `DATABASE_POOL_MAX` alone cannot stop
+many serverless instances from collectively exceeding that global limit.

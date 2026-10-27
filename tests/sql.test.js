@@ -538,6 +538,17 @@ test('AstraPay deposits credit only once through the verified, exact server RPC'
   assert.equal(await walletBalance(db, user), 0, 'creating an invoice never credits the wallet');
 
   const expiresAt = new Date(Date.now() + 8 * 60 * 1000).toISOString();
+  await expectDbError(
+    () => db.query(`select public.rpc_store_astrapay_invoice($1,$2,$3,1008,7,$4,$5,$6,'pending')`, [
+      depositId,
+      'order-1',
+      reference,
+      'https://gateway.astrapay.biz.id/pay/order-1',
+      '000201010212-qris-payload',
+      expiresAt
+    ]),
+    'PAYMENT_PROVIDER_CONTRACT_INVALID'
+  );
   await db.query(`select public.rpc_store_astrapay_invoice($1,$2,$3,1001,0,$4,$5,$6,'pending')`, [
     depositId,
     'order-1',
@@ -549,10 +560,14 @@ test('AstraPay deposits credit only once through the verified, exact server RPC'
 
   const eventId = createHash('sha256').update(`webhook:${reference}`).digest('hex');
   await expectDbError(
+    () => db.query(`select public.rpc_confirm_astrapay_deposit($1,'order.paid','order-1',$2,1000,7,1008,now())`, [eventId, reference]),
+    'PAYMENT_AMOUNT_MISMATCH'
+  );
+  await expectDbError(
     () => db.query(`select public.rpc_confirm_astrapay_deposit($1,'order.paid','order-1',$2,999,0,1001,now())`, [eventId, reference]),
     'PAYMENT_AMOUNT_MISMATCH'
   );
-  assert.equal(await walletBalance(db, user), 0, 'amount mismatch is rejected before any ledger credit');
+  assert.equal(await walletBalance(db, user), 0, 'nonzero fees or amount mismatch are rejected before any ledger credit');
 
   const confirmed = await db.query(
     `select public.rpc_confirm_astrapay_deposit($1,'order.paid','order-1',$2,1000,0,1001,now()) as r`,

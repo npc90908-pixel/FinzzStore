@@ -5,6 +5,7 @@
 // ============================================================================
 import { fromDbAmount } from './money.js';
 import { MAXIMUM_GATEWAY_TOPUP_AMOUNT, normalizeDepositPolicy } from './deposit-policy.js';
+import QRCode from 'qrcode';
 
 const TX_LABEL = {
   deposit: 'Deposit',
@@ -44,7 +45,7 @@ export function createWalletService({ db, settings, orders, payment }) {
       const pendingManualDeposits = pendingDeposits.rows.filter((d) => d.method === 'manual_transfer');
       const pendingGatewayDeposits = pendingDeposits.rows.filter((d) => d.method === 'gateway');
       const effectiveDepositPolicy = normalizeDepositPolicy(depositPolicy);
-      const toDepositSummary = (d) => ({
+      const toDepositSummary = async (d, { includeQrImage = true } = {}) => ({
         id: d.id,
         amount: fromDbAmount(d.amount),
         approvedAmount: d.approved_amount ? fromDbAmount(d.approved_amount) : null,
@@ -62,6 +63,12 @@ export function createWalletService({ db, settings, orders, payment }) {
           feeAmount: fromDbAmount(d.fee_amount),
           checkoutUrl: d.status === 'pending' ? d.checkout_url : null,
           qris: d.status === 'pending' ? d.qris_payload : null,
+          qrisImage: includeQrImage && d.status === 'pending' && d.qris_payload
+            ? await QRCode.toDataURL(d.qris_payload, { errorCorrectionLevel: 'M', margin: 2, width: 280 }).catch(() => {
+                // Keep wallet summary available even if a malformed provider payload cannot render.
+                return null;
+              })
+            : null,
           providerStatus: d.provider_status,
           expiresAt: d.expires_at,
           paidAt: d.paid_at
@@ -75,8 +82,8 @@ export function createWalletService({ db, settings, orders, payment }) {
         transactions: rows.map(toTransaction),
         pagination: { page, perPage, total, pages: Math.max(1, Math.ceil(total / perPage)) },
         activeOrders: activeOrders.map((o) => orders.toPublic(o, { includeOtp: true })),
-        deposits: deposits.rows.map(toDepositSummary),
-        pendingDeposits: pendingDeposits.rows.map(toDepositSummary),
+        deposits: await Promise.all(deposits.rows.map((row) => toDepositSummary(row, { includeQrImage: false }))),
+        pendingDeposits: await Promise.all(pendingDeposits.rows.map((row) => toDepositSummary(row))),
         pendingDepositCount: pendingManualDeposits.length,
         pendingGatewayCount: pendingGatewayDeposits.length,
         depositPolicy: {

@@ -889,6 +889,7 @@ test('AstraPay deposits require a signed callback plus fresh provider verificati
     assert.equal(ledger.length, 1);
     assert.equal(ledger[0].amount, 1000);
     assert.equal(ledger[0].metadata.pay_amount, 1001);
+    assert.equal(ledger[0].metadata.fee_amount, 0);
 
     const replay = await client.post('/api/webhooks/astrapay', rawBody, {
       headers: { 'x-pg2-timestamp': timestamp, 'x-pg2-signature': `v1=${signature}` }

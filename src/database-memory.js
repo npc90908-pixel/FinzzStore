@@ -1264,8 +1264,9 @@ export function createMemoryDatabase({ logger } = {}) {
           if (!['pending', 'approved'].includes(current.status)) throw appErrorFromCode('DEPOSIT_ALREADY_REVIEWED');
           if (current.provider_order_id && current.provider_order_id !== params.providerOrderId) throw appErrorFromCode('PAYMENT_ORDER_MISMATCH');
           const conflict = [...store.deposits.values()].some((d) => d.id !== current.id && d.provider_order_id === params.providerOrderId);
-          if (conflict || params.feeAmount !== 0 || !Number.isSafeInteger(params.payAmount)
-              || params.payAmount < Number(current.amount)) {
+          if (conflict || !Number.isSafeInteger(params.feeAmount) || params.feeAmount !== 0
+              || !Number.isSafeInteger(params.payAmount)
+              || params.payAmount < Number(current.amount) + params.feeAmount) {
             throw appErrorFromCode('PAYMENT_AMOUNT_MISMATCH');
           }
           Object.assign(current, {
@@ -1313,9 +1314,9 @@ export function createMemoryDatabase({ logger } = {}) {
           const expiresAtMs = Date.parse(deposit.expires_at || '');
           if (deposit.provider_order_id && deposit.provider_order_id !== params.providerOrderId
               || Number(deposit.amount) !== params.baseAmount
-              || params.feeAmount !== 0
+              || !Number.isSafeInteger(params.feeAmount) || params.feeAmount !== 0
               || !Number.isSafeInteger(params.payAmount)
-              || params.payAmount < params.baseAmount
+              || params.payAmount < params.baseAmount + params.feeAmount
               || (deposit.pay_amount !== null && Number(deposit.pay_amount) !== params.payAmount)
               || !Number.isFinite(paidAtMs)
               || (Number.isFinite(expiresAtMs) && paidAtMs > expiresAtMs)
@@ -1715,16 +1716,23 @@ export function createMemoryDatabase({ logger } = {}) {
 
     webhooks: {
       async record(deliveryId, eventType, payload) {
-        if (store.webhooks.has(deliveryId)) return { inserted: false };
-        const row = { id: store.webhooks.size + 1, delivery_id: deliveryId, event_type: eventType, payload, received_at: nowIso(), processed_at: null };
+        const existing = store.webhooks.get(deliveryId);
+        if (existing) {
+          if (existing.processed_at || !existing.error) return { inserted: false };
+          // A previously failed delivery can be reclaimed for a provider retry.
+          existing.error = null;
+          return { inserted: true, id: existing.id, retried: true };
+        }
+        const row = { id: store.webhooks.size + 1, delivery_id: deliveryId, event_type: eventType, payload, received_at: nowIso(), processed_at: null, error: null };
         store.webhooks.set(deliveryId, row);
         return { inserted: true, id: row.id };
       },
       async markProcessed(deliveryId, error = null) {
         const row = store.webhooks.get(deliveryId);
         if (row) {
-          row.processed_at = nowIso();
           row.error = error;
+          // Errors remain unprocessed so a signed provider retry can recover.
+          row.processed_at = error ? null : nowIso();
         }
       }
     },

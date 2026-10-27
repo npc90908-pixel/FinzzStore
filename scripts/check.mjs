@@ -4,7 +4,7 @@
 //   1. every JavaScript file parses (node --check, ES module aware)
 //   2. no physical .html file is shipped
 //   3. no CommonJS `require` inside the ES module source tree
-//   4. no framework dependency (Express/Fastify/Koa/Nest)
+//   4. Express.js + EJS are required for the server application
 //   5. engines pin Node 24 and a lockfile is committed
 //   6. no server secret names leak into public/ assets
 //   7. runtime directories are git-ignored
@@ -75,11 +75,12 @@ notes.push('source tree is pure ESM');
 
 // ----------------------------------------------------------- 4. no framework
 const pkg = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8'));
-const FORBIDDEN = ['express', 'fastify', 'koa', '@nestjs/core', 'hapi', '@hapi/hapi', 'restify', 'polka', 'micro'];
 const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-for (const name of FORBIDDEN) {
-  if (deps.includes(name)) fail(`forbidden framework dependency: ${name}`);
+for (const name of ['express', 'ejs', 'qrcode']) {
+  if (!pkg.dependencies?.[name]) fail(`required dependency missing: ${name}`);
 }
+if (!existsSync(path.join(ROOT, 'views', 'layouts', 'document.ejs'))) fail('EJS document layout is missing');
+if (!existsSync(path.join(ROOT, 'src', 'express-app.js'))) fail('Express application adapter is missing');
 notes.push(`dependencies: ${deps.join(', ') || 'none'}`);
 
 // --------------------------------------------------------------- 5. engines
