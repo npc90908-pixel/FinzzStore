@@ -45,6 +45,7 @@ const PATHS = {
   database: '<ellipse cx="12" cy="6" rx="7.5" ry="2.8"/><path d="M4.5 6v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V6"/><path d="M4.5 12v6c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.2A1.7 1.7 0 0 0 7 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 13.7H3a2 2 0 1 1 0-4h.2A1.7 1.7 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.6V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.4 1z"/>',
   eye: '<path d="M2.8 12S6 6.5 12 6.5 21.2 12 21.2 12 18 17.5 12 17.5 2.8 12 2.8 12z"/><circle cx="12" cy="12" r="2.6"/>',
+  eyeOff: '<path d="m3 3 18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.8 6.8A10.7 10.7 0 0 1 12 6.5c6 0 9.2 5.5 9.2 5.5a15.8 15.8 0 0 1-3 3.5"/><path d="M6.2 6.2C4 7.6 2.8 12 2.8 12s3.2 5.5 9.2 5.5a10.8 10.8 0 0 0 2.3-.3"/>',
   trash: '<path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.8 12.2A1.6 1.6 0 0 0 8.9 20.8h6.2a1.6 1.6 0 0 0 1.6-1.6L17.5 7"/><path d="M10.5 11v5.5M13.5 11v5.5"/>',
   pause: '<rect x="7" y="5" width="3.4" height="14" rx="1.2"/><rect x="13.6" y="5" width="3.4" height="14" rx="1.2"/>',
   play: '<path d="M8 5.2v13.6L19 12z"/>',
@@ -99,11 +100,11 @@ export function icon(name, { size = 18, strokeWidth = 1.7, className = '', label
 }
 
 export const BRAND_MARK_SVG = `<svg viewBox="0 0 48 48" width="36" height="36" role="img" aria-label="FINZZ Store" xmlns="http://www.w3.org/2000/svg">
-  <rect x="1.5" y="1.5" width="45" height="45" rx="15" fill="#101522" stroke="rgba(148,163,198,.22)" stroke-width="1.2"/>
-  <rect x="5.5" y="5.5" width="37" height="37" rx="12" fill="#151d30"/>
-  <path d="M16 34V18a5 5 0 0 1 5-5h12.5" fill="none" stroke="#7c8cff" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M16.4 23.5h12.2" fill="none" stroke="#2ee6b6" stroke-width="4.6" stroke-linecap="round"/>
-  <circle cx="33.7" cy="33.1" r="2.8" fill="#2ee6b6"/>
+  <rect x="1.5" y="1.5" width="45" height="45" rx="15" fill="#101522" stroke="#3b465e" stroke-opacity=".68" stroke-width="1.2"/>
+  <rect x="5.5" y="5.5" width="37" height="37" rx="12" fill="#131a2a"/>
+  <path d="M14.5 34V18.5a4.5 4.5 0 0 1 4.5-4.5h14" fill="none" stroke="#7c8cff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M15 23.5h11" fill="none" stroke="#2ee6b6" stroke-width="4.2" stroke-linecap="round"/>
+  <path d="M23.5 25.5h10l-10 8.5h10" fill="none" stroke="#2ee6b6" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
 export const iconNames = Object.keys(PATHS);

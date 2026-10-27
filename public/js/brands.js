@@ -19,17 +19,23 @@ export const BRAND_BY_APP = Object.freeze({
   ig: { slug: 'instagram', label: 'Instagram' },
   fb: { slug: 'facebook', label: 'Facebook' },
   tw: { slug: 'x', label: 'X' },
+  x: { slug: 'x', label: 'X' },
   ds: { slug: 'discord', label: 'Discord' },
+  dc: { slug: 'discord', label: 'Discord' },
   lf: { slug: 'tiktok', label: 'TikTok' },
+  tt: { slug: 'tiktok', label: 'TikTok' },
   go: { slug: 'google', label: 'Google' },
+  gg: { slug: 'google', label: 'Google' },
   ccu: { slug: 'google', label: 'Google Chat' },
   gf: { slug: 'google', label: 'Google Voice' },
   nf: { slug: 'netflix', label: 'Netflix' },
   alj: { slug: 'spotify', label: 'Spotify' },
-  // Deliberately no asset: the owner of the trademark asked Simple Icons to
-  // remove it, so the UI shows a wordmark instead of a look-alike.
+  // Deliberately no asset for unsupported/removed trademarks: the UI shows a
+  // wordmark instead of inventing or guessing at a logo.
   ts: { slug: null, label: 'PayPal' },
-  ub: { slug: null, label: 'Uber' }
+  ub: { slug: null, label: 'Uber' },
+  sh: { slug: null, label: 'Shopee' },
+  gr: { slug: null, label: 'Grab' }
 });
 
 export const brandFor = (appId) => BRAND_BY_APP[appId] || null;

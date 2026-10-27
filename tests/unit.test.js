@@ -4,7 +4,8 @@
 // ============================================================================
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHmac } from 'node:crypto';
@@ -25,6 +26,8 @@ import { renderDocument } from '../src/render.js';
 import { createLogger } from '../src/logging.js';
 import { marqueeBrands, splitRows } from '../public/js/brands.js';
 import { createGoogleOAuth } from '../src/auth-google.js';
+import { loadOptionalEnvFile } from '../src/env.js';
+import { createMailer, diagnoseSmtpError, passwordResetEmail, verificationEmail } from '../src/auth/mailer.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -253,6 +256,7 @@ test('renderer: server HTML carries a CSP nonce and a JSON boot state', () => {
   assert.ok(!/src="https?:\/\//.test(html), 'the shell must not load external scripts');
   assert.ok(!/@import\s+url\(/.test(html), 'the shell must not load external styles');
   assert.ok(html.includes('/js/main.js'));
+  assert.ok(html.includes('/css/auth.css'), 'the upgraded login/register presentation is included in the shared shell');
   const canonical = html.match(/<link rel="canonical" href="([^"]+)">/)?.[1];
   assert.equal(canonical, 'https://finzz.test/reset-password', 'query secrets never enter canonical/share URLs');
   assert.match(html, /property="og:image" content="https:\/\/finzz\.test\/assets\/og-finzz\.png"/);
@@ -332,6 +336,30 @@ test('webhook signature contract matches the supplier documentation', () => {
 });
 
 // --------------------------------------------------------------- config -----
+test('optional .env loader tolerates a missing file and preserves process variables', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'finzz-env-test-'));
+  const file = path.join(directory, '.env');
+  const loadedKey = 'FINZZ_ENV_LOADER_TEST';
+  const precedenceKey = 'FINZZ_ENV_PRECEDENCE_TEST';
+  const oldLoaded = process.env[loadedKey];
+  const oldPrecedence = process.env[precedenceKey];
+  try {
+    delete process.env[loadedKey];
+    process.env[precedenceKey] = 'runtime-value';
+    await writeFile(file, `${loadedKey}=from-file\n${precedenceKey}=from-file\n`, 'utf8');
+    assert.equal(loadOptionalEnvFile(file), true);
+    assert.equal(process.env[loadedKey], 'from-file');
+    assert.equal(process.env[precedenceKey], 'runtime-value', 'deployment variables take precedence over .env');
+    assert.equal(loadOptionalEnvFile(path.join(directory, 'missing.env')), false);
+  } finally {
+    if (oldLoaded === undefined) delete process.env[loadedKey];
+    else process.env[loadedKey] = oldLoaded;
+    if (oldPrecedence === undefined) delete process.env[precedenceKey];
+    else process.env[precedenceKey] = oldPrecedence;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 const PROD_ENV = {
   NODE_ENV: 'production',
   APP_URL: 'https://finzz.test',
@@ -406,6 +434,108 @@ test('config: optional integrations enable from complete credentials and never e
 });
 
 
+test('config: SMTP defaults, sender inference, Gmail app passwords and TLS are consistent', () => {
+  const gmail = loadConfig({
+    NODE_ENV: 'test',
+    SMTP_HOST: 'smtp.gmail.com',
+    SMTP_USER: 'mailer@finzz.test',
+    SMTP_PASS: 'abcd efgh ijkl mnop'
+  });
+  assert.equal(gmail.smtp.pass, 'abcdefghijklmnop');
+  assert.equal(gmail.smtp.port, 587);
+  assert.equal(gmail.smtp.secure, false, 'port 587 uses STARTTLS');
+  assert.equal(gmail.smtp.from, 'FINZZ Store <mailer@finzz.test>');
+  const startTls = loadConfig({
+    NODE_ENV: 'test', SMTP_HOST: 'smtp.example.test', SMTP_PORT: '587', SMTP_FROM: 'relay@example.test', SMTP_SECURE: 'true'
+  });
+  assert.equal(startTls.smtp.secure, false, 'port 587 always negotiates STARTTLS even with a legacy SMTP_SECURE=true');
+
+  const implicitTls = loadConfig({
+    NODE_ENV: 'test', SMTP_HOST: 'smtp.example.test', SMTP_PORT: '465', SMTP_FROM: 'mailer@example.test'
+  });
+  assert.equal(implicitTls.smtp.secure, true, 'port 465 always uses implicit TLS');
+  assert.equal(loadConfig({ NODE_ENV: 'test', SMTP_HOST: 'smtp.example.test', SMTP_USER: 'mailer@example.test' }).smtp.configError.code, 'SMTP_AUTH_PAIR_REQUIRED');
+  assert.equal(loadConfig({ NODE_ENV: 'test', SMTP_USER: 'mailer@example.test', SMTP_PASS: 'secret' }).smtp.configError.code, 'SMTP_HOST_REQUIRED');
+  assert.equal(loadConfig({ NODE_ENV: 'test', SMTP_HOST: 'smtp.example.test' }).smtp.configError.code, 'SMTP_SENDER_REQUIRED');
+});
+
+test('mailer verifies SMTP safely, reports the latest result, and sends branded templates', async () => {
+  const config = loadConfig({
+    NODE_ENV: 'test',
+    SMTP_HOST: 'smtp.example.test',
+    SMTP_USER: 'mailer@finzz.test',
+    SMTP_PASS: 'private-smtp-secret'
+  });
+  const sent = [];
+  const logs = [];
+  let verificationError = null;
+  let transportOptions;
+  const logger = Object.fromEntries(['info', 'warn', 'error'].map((level) => [level, (message, fields) => logs.push({ level, message, fields })]));
+  const transport = {
+    async verify() { if (verificationError) throw verificationError; },
+    async sendMail(message) { sent.push(message); return { messageId: 'message-1' }; }
+  };
+  const mailer = createMailer(config, {
+    logger,
+    transportFactory: (options) => { transportOptions = options; return transport; }
+  });
+
+  assert.equal(transportOptions.host, 'smtp.example.test');
+  assert.equal(transportOptions.requireTLS, true);
+  assert.deepEqual(transportOptions.auth, { user: 'mailer@finzz.test', pass: 'private-smtp-secret' });
+  assert.equal(mailer.status().lastCheck, null);
+
+  let relayOptions;
+  const relayConfig = loadConfig({ NODE_ENV: 'test', SMTP_HOST: 'smtp.example.test', SMTP_FROM: 'relay@finzz.test' });
+  createMailer(relayConfig, { transportFactory: (options) => { relayOptions = options; return transport; } });
+  assert.equal(relayOptions.secure, false);
+  assert.equal(relayOptions.requireTLS, true, 'unauthenticated mail relays also must not downgrade from STARTTLS');
+  assert.equal(relayOptions.auth, undefined);
+
+  const success = await mailer.verify();
+  assert.equal(success.ok, true);
+  assert.equal(success.lastCheck.ok, true);
+
+  verificationError = Object.assign(new Error('private-smtp-secret: invalid password response'), {
+    code: 'EAUTH', responseCode: 535, command: 'AUTH PLAIN'
+  });
+  const failure = await mailer.verify();
+  assert.equal(failure.ok, false);
+  assert.equal(failure.lastCheck.ok, false, 'the dashboard-facing nested state is the latest check, not stale success');
+  assert.equal(failure.diagnostic.code, 'SMTP_AUTH_FAILED');
+  assert.ok(!JSON.stringify(failure).includes('private-smtp-secret'));
+  assert.ok(!JSON.stringify(logs).includes('private-smtp-secret'));
+  assert.equal(diagnoseSmtpError(Object.assign(new Error('dns'), { code: 'ENOTFOUND' })).code, 'SMTP_HOST_UNREACHABLE');
+
+  const message = verificationEmail({ code: '<123456>', appName: 'FINZZ <Store>', ttlMinutes: 10 });
+  assert.match(message.subject, /kode verifikasi/i);
+  assert.ok(!message.subject.includes('123456'), 'the one-time code is not exposed in the email subject');
+  assert.ok(message.html.includes('&lt;123456&gt;'), 'OTP is escaped inside the branded HTML email');
+  assert.match(message.html, /#7c8cff/i);
+  assert.match(message.text, /10 menit/);
+
+  const reset = passwordResetEmail({ link: 'https://finzz.test/reset?token=a&b=<c>', appName: 'FINZZ Store', ttlMinutes: 15 });
+  assert.ok(reset.html.includes('token=a&amp;b=&lt;c&gt;'), 'reset links are escaped in HTML');
+  assert.ok(reset.text.includes('token=a&b=<c>'), 'plain-text email retains the original URL');
+  verificationError = null;
+  await mailer.send({ to: 'user@finzz.test', ...message });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].disableFileAccess, true);
+  assert.equal(sent[0].disableUrlAccess, true);
+  assert.equal(mailer.status().lastCheck.action, 'send');
+
+  const unconfigured = createMailer(loadConfig({ NODE_ENV: 'test' }), { transportFactory: () => { throw new Error('should not construct transport'); } });
+  const noSmtp = await unconfigured.verify();
+  assert.equal(noSmtp.configured, false);
+  assert.equal(noSmtp.diagnostic.code, 'SMTP_NOT_CONFIGURED');
+  const incomplete = createMailer(loadConfig({ NODE_ENV: 'test', SMTP_HOST: 'smtp.gmail.com', SMTP_USER: 'mailer@finzz.test' }), {
+    transportFactory: () => { throw new Error('invalid optional SMTP settings must not start a transport'); }
+  });
+  const diagnosed = await incomplete.verify();
+  assert.equal(diagnosed.configured, false);
+  assert.equal(diagnosed.diagnostic.code, 'SMTP_AUTH_PAIR_REQUIRED');
+});
+
 test('Google OAuth exchanges the code server-side with PKCE and requires a verified Google identity', async () => {
   const config = loadConfig({
     NODE_ENV: 'test',
@@ -470,10 +600,25 @@ test('brands: catalogue is deduplicated by app id, known marks are colored, unkn
   assert.equal(brands[2].label, 'Layanan Baru');
   assert.equal(brands[3].src, null, 'brands without an approved asset remain wordmarks');
   assert.deepEqual(splitRows(brands.slice(0, 2), 2).map((row) => row.length), [1, 1]);
+  const mockCatalogueMarks = marqueeBrands([
+    { id: 'gg', name: 'Google' }, { id: 'tt', name: 'TikTok' }, { id: 'dc', name: 'Discord' },
+    { id: 'x', name: 'X' }, { id: 'sh', name: 'Shopee' }, { id: 'gr', name: 'Grab' }
+  ]);
+  assert.deepEqual(mockCatalogueMarks.slice(0, 4).map((brand) => brand.src), [
+    '/assets/brands/google.svg', '/assets/brands/tiktok.svg', '/assets/brands/discord.svg', '/assets/brands/x.svg'
+  ]);
+  assert.deepEqual(mockCatalogueMarks.slice(4).map((brand) => [brand.label, brand.src]), [['Shopee', null], ['Grab', null]]);
   const whatsappSvg = await readFile(path.join(ROOT, 'public/assets/brands/whatsapp.svg'), 'utf8');
   const googleSvg = await readFile(path.join(ROOT, 'public/assets/brands/google.svg'), 'utf8');
   assert.match(whatsappSvg, /fill="#25D366"/);
   assert.match(googleSvg, /fill="#4285F4"/);
+  for (const color of ['#EA4335', '#FBBC05', '#34A853']) {
+    assert.ok(googleSvg.includes(`fill="${color}"`), `the original multicolor Google G includes ${color}`);
+  }
+  const tiktokSvg = await readFile(path.join(ROOT, 'public/assets/brands/tiktok.svg'), 'utf8');
+  for (const color of ['#FF004F', '#000000', '#00F2EA']) {
+    assert.ok(tiktokSvg.includes(`fill="${color}"`), `the authentic TikTok mark includes ${color}`);
+  }
 });
 
 // ============================================================ pricing engine
@@ -607,6 +752,18 @@ test('marquee only shows brands that exist in the live catalogue', async () => {
   assert.equal(brandFor('tidak-ada'), null);
 });
 
+test('service marquee loops continuously and shows reduced-motion users one clean catalogue copy', async () => {
+  const css = await readFile(path.join(ROOT, 'public/css/components.css'), 'utf8');
+  const landing = await readFile(path.join(ROOT, 'public/js/pages/landing.js'), 'utf8');
+  assert.match(css, /animation:\s*brand-scroll-left var\(--marquee-duration, 38s\) linear infinite/);
+  assert.match(css, /animation-name:\s*brand-scroll-right/);
+  assert.doesNotMatch(css, /\.brand-marquee:hover\s+\.brand-marquee__track/, 'hovering cannot freeze the whole strip');
+  assert.match(css, /prefers-reduced-motion:\s*reduce/);
+  assert.match(css, /\.brand-marquee__group\[aria-hidden="true"\]\s*\{\s*display:\s*none;/);
+  assert.match(landing, /Math\.ceil\(viewportWidth\s*\/\s*Math\.max\(groupWidth/);
+  assert.match(landing, /cycleGroups\s*\*\s*2/, 'only visual clones are added to create a seamless infinite track');
+});
+
 test('every bundled brand SVG is sanitised and offline', async () => {
   const { readFile, readdir } = await import('node:fs/promises');
   const path = await import('node:path');
@@ -623,7 +780,10 @@ test('every bundled brand SVG is sanitised and offline', async () => {
     const withoutNamespace = svg.replace(/xmlns="http:\/\/www\.w3\.org\/2000\/svg"/g, '');
     assert.ok(!/https?:\/\//i.test(withoutNamespace), `${file}: no external URLs`);
     assert.ok(!/<image|<use|xlink:href/i.test(svg), `${file}: no embedded references`);
-    assert.match(svg, /viewBox="0 0 24 24"/, `${file}: fixed viewBox prevents layout shift`);
+    const expectedViewBox = file === 'google.svg'
+      ? /viewBox="0 0 256 262"/
+      : file === 'tiktok.svg' ? /viewBox="0 0 256 290"/ : /viewBox="0 0 24 24"/;
+    assert.match(svg, expectedViewBox, `${file}: fixed viewBox prevents layout shift`);
     assert.match(svg, /fill="#[0-9A-Fa-f]{6}"/, `${file}: uses the approved brand colour instead of a monochrome theme fill`);
     assert.match(svg, /aria-label="/, `${file}: has an accessible name`);
   }

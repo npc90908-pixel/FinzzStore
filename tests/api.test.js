@@ -5,7 +5,8 @@
 // ============================================================================
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { rm, writeFile } from 'node:fs/promises';
+import { createHmac, randomUUID } from 'node:crypto';
 
 import {
   startTestApp, registerUser, promoteToAdmin, seedBalance, walletBalance,
@@ -45,6 +46,32 @@ test('health endpoint reports database and supplier state', async () => {
   assert.equal(response.json.supplier.mode, 'mock');
   assert.equal(response.json.payment.enabled, false);
   assert.ok(!response.text.includes('service_role'), 'health must not leak secrets');
+});
+
+test('static asset validators change when same-size content is replaced', async () => {
+  const assetName = `.etag-test-${randomUUID()}.svg`;
+  const assetPath = new URL(`../public/assets/${assetName}`, import.meta.url);
+  const client = h.client();
+  try {
+    await writeFile(assetPath, '<svg>AAA</svg>', 'utf8');
+    const first = await client.get(`/assets/${assetName}`);
+    assert.equal(first.status, 200);
+    assert.match(first.text, /AAA/);
+    const firstTag = first.headers.get('etag');
+
+    // Keep the byte length identical and replace immediately; a size/mtime
+    // validator can collide here, while the content hash must not.
+    await writeFile(assetPath, '<svg>BBB</svg>', 'utf8');
+    const replacement = await client.get(`/assets/${assetName}`, { headers: { 'if-none-match': firstTag } });
+    assert.equal(replacement.status, 200);
+    assert.notEqual(replacement.headers.get('etag'), firstTag);
+    assert.match(replacement.text, /BBB/);
+
+    const cached = await client.get(`/assets/${assetName}`, { headers: { 'if-none-match': replacement.headers.get('etag') } });
+    assert.equal(cached.status, 304);
+  } finally {
+    await rm(assetPath, { force: true });
+  }
 });
 
 test('Google OAuth uses a state cookie, creates a verified session, and returns only to a safe local path', async () => {
@@ -627,6 +654,20 @@ test('webhooks reject forged signatures and apply genuine ones', async () => {
 });
 
 // --------------------------------------------------------------- admin -----
+test('SMTP verification diagnostics are private to admins and redact provider details', async () => {
+  const denied = await h.client().post('/api/admin/smtp/verify', {});
+  assert.equal(denied.status, 401);
+
+  const response = await admin.client.post('/api/admin/smtp/verify', {});
+  assert.equal(response.status, 200);
+  assert.equal(response.json.configured, false);
+  assert.equal(response.json.ok, false);
+  assert.equal(response.json.diagnostic.code, 'SMTP_NOT_CONFIGURED');
+  assert.equal(response.json.lastCheck.ok, false);
+  assert.equal(Object.hasOwn(response.json, 'pass'), false);
+  assert.equal(Object.hasOwn(response.json, 'smtpPass'), false);
+});
+
 test('admin dashboard reports real totals, audit trail and settings guards', async () => {
   const dashboard = await admin.client.get('/api/admin/dashboard');
   assert.equal(dashboard.status, 200);
@@ -637,6 +678,10 @@ test('admin dashboard reports real totals, audit trail and settings guards', asy
   assert.equal(dashboard.json.finance.net_profit, dashboard.json.finance.gross_revenue - dashboard.json.finance.supplier_cost);
   assert.ok(Array.isArray(dashboard.json.recent_orders));
   assert.ok(dashboard.json.catalog.lastResult.status);
+  assert.equal(dashboard.json.smtp.configured, false);
+  assert.equal(dashboard.json.smtp.lastCheck.action, 'verify');
+  assert.equal(dashboard.json.smtp.lastCheck.diagnostic.code, 'SMTP_NOT_CONFIGURED');
+  assert.equal(Object.hasOwn(dashboard.json.smtp, 'pass'), false);
 
   const audit = await admin.client.get('/api/admin/audit');
   assert.equal(audit.status, 200);

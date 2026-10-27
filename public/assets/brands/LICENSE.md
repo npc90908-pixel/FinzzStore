@@ -1,63 +1,55 @@
 # Aset logo merek — sumber dan lisensi
 
-File di folder ini dipakai oleh marquee logo di landing page. Semuanya **SVG
-lokal**: tidak ada permintaan ke CDN pihak ketiga saat halaman dibuka, jadi
-tidak ada ketergantungan pada URL yang bisa mati atau berubah.
+File di folder ini dipakai oleh marquee layanan. Semuanya **SVG lokal**: tidak
+ada permintaan ke CDN pihak ketiga saat halaman dibuka, jadi UI tidak bergantung
+pada URL yang dapat mati atau berubah.
 
-## Sumber
+## Sumber berkas
 
-Semua berkas diambil dari **Simple Icons** (`https://cdn.simpleicons.org/<slug>`)
-pada 26 Oktober 2026, lalu dibersihkan (lihat bagian Sanitasi).
+- Mayoritas mark berasal dari **Simple Icons** (`https://cdn.simpleicons.org/<slug>`)
+  pada 26 Oktober 2026. Geometri disanitasi dan diberi warna identitas yang umum
+  dipakai oleh masing-masing merek.
+- `google.svg` menggunakan mark **Google G multicolor** dan `tiktok.svg`
+  memakai mark TikTok berlapis warna dari `google-icon.svg` dan
+  `tiktok-icon.svg` pada proyek `gilbarbara/logos`, commit
+  `d6960edc1b7309d392c76e40d3a320df7f9ff85c`. Berkas sumber proyek tersebut
+  dirilis di bawah **CC0 1.0 Universal**.
 
-- Proyek: https://simpleicons.org
-- Lisensi berkas ikon: **CC0 1.0 Universal** (public domain dedication)
-- Repositori: https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md
+Repositori Simple Icons: https://github.com/simple-icons/simple-icons
+Repositori `gilbarbara/logos`: https://github.com/gilbarbara/logos
 
 ## Catatan merek dagang (penting)
 
-Simple Icons merilis **berkas SVG**-nya sebagai CC0, tetapi **logo itu sendiri
-adalah merek dagang** pemiliknya. CC0 tidak memberikan lisensi merek. Logo di
-sini dipakai semata-mata untuk **mengidentifikasi layanan yang benar-benar ada
-di katalog** — penggunaan nominatif, bukan klaim afiliasi, sponsor, atau
-endorsement.
+Lisensi CC0 pada berkas SVG tidak memberikan lisensi merek dagang. Setiap logo
+adalah milik pemilik mereknya masing-masing. Logo di sini hanya dipakai untuk
+mengidentifikasi layanan yang benar-benar ada di katalog (penggunaan nominatif),
+bukan untuk menyiratkan afiliasi, sponsor, atau endorsement.
 
-Panduan merek resmi yang relevan (untuk rujukan operator):
+Google G dipakai dalam warna dan geometri multicolor aslinya untuk identitas
+provider OAuth serta layanan Google di katalog. Ikuti panduan merek Google:
+https://developers.google.com/identity/branding-guidelines
 
-| Merek | Panduan resmi |
-|---|---|
-| WhatsApp | https://www.meta.com/en-gb/brand/resources/whatsapp/whatsapp-brand/ |
-| YouTube | https://developers.google.com/youtube/terms/branding-guidelines |
-| Netflix | https://brand.netflix.com/en/ |
-| Meta / Instagram / Facebook | https://www.meta.com/brand/resources/ |
+Jika suatu saat salah satu pemilik merek meminta asetnya tidak dipakai, hapus
+berkasnya dari folder ini **dan** baris pemetaannya di `public/js/brands.js`.
+Marquee akan menampilkan wordmark teks sebagai gantinya.
 
-Jika suatu saat salah satu pemilik merek meminta asetnya tidak dipakai, cukup
-hapus berkasnya dari folder ini **dan** barisnya di
-`public/js/brands.js`. Marquee otomatis menampilkan *wordmark* teks sebagai
-gantinya — tidak ada halaman yang rusak.
+## Mark yang tidak tersedia
 
-## Microsoft
+Tidak semua layanan mempunyai aset yang boleh atau layak dibundel. Contohnya,
+PayPal ditarik dari Simple Icons atas permintaan pemilik merek; Shopee dan Grab
+belum memiliki aset yang disetujui di katalog aplikasi ini. Semuanya tetap
+tampil sebagai wordmark teks, bukan logo tiruan.
 
-Microsoft **tidak** tersedia di Simple Icons (ditarik atas permintaan pemilik
-merek), jadi tidak ada berkasnya di sini. Ini contoh nyata jalur *fallback*:
-layanan tetap tampil sebagai wordmark teks, bukan logo tiruan.
+## Sanitasi dan tampilan
 
-## Sanitasi
+1. SVG ditulis ulang sebagai geometri saja; tidak ada skrip, handler, gambar,
+   font, atau referensi jaringan eksternal.
+2. Logo memakai `viewBox` internal dan ukuran gambar eksplisit, sehingga
+   pemuatan tidak menyebabkan layout shift. Google mempertahankan rasio mark
+   G aslinya.
+3. `role="img"` dan `aria-label` disediakan untuk pembaca layar.
 
-Setiap SVG ditulis ulang oleh skrip, bukan disalin mentah:
-
-1. Jika mengandung `<script>`, atribut `on*=`, `xlink:href`, `<image>`, `<use>`,
-   atau URL absolut → berkas **ditolak** (tidak ada yang ditolak saat ini).
-2. Hanya `<path d="…">` yang dipertahankan, dibungkus `<svg viewBox="0 0 24 24">`.
-3. `fill` memakai warna identitas merek yang paling dikenal agar logo tetap berwarna dan terbaca pada strip layanan. Untuk X yang identitasnya hitam/putih, file memakai hitam dan CSS membaliknya khusus tema gelap.
-4. `role="img"` + `aria-label` untuk pembaca layar.
-
-Hasilnya: tidak ada JavaScript, tidak ada referensi eksternal, tidak ada
-pelacakan — hanya geometri.
-
-## Aturan pemakaian di UI
-
-- Hanya logo untuk layanan yang **ada di katalog aktual** yang dirender.
-- Marquee diberi `aria-hidden="true"`; teks daftar layanan tetap tersedia untuk
-  pembaca layar di bagian katalog.
-- Animasi dimatikan otomatis pada `prefers-reduced-motion: reduce`.
-- Duplikasi visual untuk efek gulir **tidak** membuat baris baru di database.
+Marquee hanya memakai entri dari katalog aktual, menghapus ID aplikasi duplikat,
+dan menandai salinan visual untuk animasi sebagai `aria-hidden`. Salinan tersebut
+bukan entri tambahan di database atau klaim jumlah stok. Animasi juga mengikuti
+preferensi `prefers-reduced-motion`.

@@ -1,21 +1,22 @@
 // ============================================================================
 // LOGIN PAGE
 // ============================================================================
-import { el, Input, Button, Alert, runWithLoading, clearFormErrors, fieldError, toast } from '../ui.js';
-import { icon, BRAND_MARK_SVG } from '../icons.js';
+import { el, Input, Button, Alert, runWithLoading, clearFormErrors, fieldError, toast, setChildren } from '../ui.js';
+import { icon } from '../icons.js';
 import { ApiError } from '../api.js';
 import { mountTurnstile, turnstileConfig } from '../turnstile.js';
+import { authPageShell, authDivider, googleOAuthButton, withPasswordVisibility } from './_auth-ui.js';
 
 export default async function login(ctx) {
   const { api, store, navigate, query, layout } = ctx;
   const next = query.get('next');
 
   const demoAccounts = store.config?.demoAccounts || [];
-  const form = el('form', { class: 'auth-card', attrs: { novalidate: true } });
-  const email = Input({ label: 'Email', name: 'email', type: 'email', autocomplete: 'email', required: true, placeholder: 'nama@email.com' });
-  const password = Input({ label: 'Password', name: 'password', type: 'password', autocomplete: 'current-password', required: true, placeholder: '••••••••' });
-  const submit = Button({ variant: 'primary', size: 'lg', block: true, type: 'submit', children: 'Masuk' });
-  const errorBox = el('div', { attrs: { hidden: true } });
+  const form = el('form', { class: 'auth-card auth-card--login', attrs: { novalidate: true } });
+  const email = Input({ label: 'Email', name: 'email', type: 'email', autocomplete: 'email', required: true, placeholder: 'nama@domain.com' });
+  const password = withPasswordVisibility(Input({ label: 'Password', name: 'password', type: 'password', autocomplete: 'current-password', required: true, placeholder: 'Masukkan password' }));
+  const submit = Button({ variant: 'primary', size: 'lg', block: true, type: 'submit', children: 'Masuk ke akun' });
+  const errorBox = el('div', { class: 'auth-feedback', attrs: { hidden: true, role: 'status', 'aria-live': 'polite' } });
 
   // Bot protection is mounted only when the server reports it enabled.
   const captchaBox = el('div', { class: 'turnstile-slot' });
@@ -36,34 +37,15 @@ export default async function login(ctx) {
   };
   const oauthMessage = oauthErrors[query.get('oauth') || ''];
 
-  form.append(
+  setChildren(form,
     el('div', { class: 'auth-card__head' },
-      el('span', { class: 'feature-tile feature-tile--lg auth-card__icon' }, icon('shield', { size: 22 })),
-      el('a', { class: 'brand', attrs: { href: '/' }, onClick: (e) => { e.preventDefault(); navigate('/'); } },
-        icon('arrowRight', { size: 15 }), el('span', { text: 'Kembali ke beranda' })),
-      el('h1', { class: 'auth-card__title', text: 'Masuk ke akun Anda' }),
-      el('p', { class: 'auth-card__lead', text: 'Gunakan email dan password yang terdaftar untuk mengakses saldo, order, dan OTP.' })
+      el('span', { class: 'auth-card__eyebrow' }, icon('lock', { size: 14 }), el('span', { text: 'FINZZ ACCOUNT' })),
+      el('h1', { class: 'auth-card__title', text: 'Selamat datang kembali' }),
+      el('p', { class: 'auth-card__lead', text: 'Masuk untuk mengelola saldo, layanan, dan order Anda.' })
     ),
-    errorBox,
+    ...(googleOAuthEnabled ? [googleOAuthButton({ next: next || '/dashboard' }), authDivider()] : []),
     ...(oauthMessage ? [Alert({ tone: 'warning', title: 'Login Google', children: oauthMessage })] : []),
-    ...(googleOAuthEnabled ? [
-      el('a', {
-        class: 'btn btn--outline btn--lg btn--block oauth-login__button',
-        attrs: {
-          href: `/api/auth/google?next=${encodeURIComponent(next || '/dashboard')}`,
-          'data-native-navigation': '',
-          'aria-label': 'Lanjutkan dengan Google'
-        }
-      },
-        el('img', { attrs: { src: '/assets/brands/google.svg', alt: '', width: '20', height: '20', decoding: 'async' } }),
-        el('span', { text: 'Lanjutkan dengan Google' })
-      ),
-      el('div', { class: 'oauth-login__divider', attrs: { 'aria-hidden': 'true' } },
-        el('span'), el('span', { text: 'atau gunakan email' }), el('span')
-      )
-    ] : []),
-    // Native Element.append() would stringify a bare `null` into visible text,
-    // so the conditional node is spread in instead of passed as a null slot.
+    errorBox,
     ...(demoAccounts.length ? [demoHint(demoAccounts, (account) => {
       email.querySelector('input').value = account.email;
       password.querySelector('input').value = account.password;
@@ -72,15 +54,15 @@ export default async function login(ctx) {
     })] : []),
     email,
     password,
-    el('div', { class: 'row row--between' },
-      el('span', { class: 'text-xs text-dim', text: 'Sesi aman dengan cookie HttpOnly' }),
+    el('div', { class: 'auth-form-meta' },
+      el('span', { class: 'auth-form-meta__secure' }, icon('shield', { size: 14 }), el('span', { text: 'Sesi aman' })),
       el('a', { class: 'text-sm', attrs: { href: '/forgot-password' }, text: 'Lupa password?', onClick: (e) => { e.preventDefault(); navigate('/forgot-password'); } })
     ),
     captchaBox,
     submit,
     el('div', { class: 'auth-footer' },
       el('span', { text: 'Belum punya akun?' }),
-      el('a', { attrs: { href: '/register' }, text: 'Daftar sekarang', onClick: (e) => { e.preventDefault(); navigate('/register'); } })
+      el('a', { attrs: { href: '/register' }, text: 'Daftar gratis', onClick: (e) => { e.preventDefault(); navigate('/register'); } })
     )
   );
 
@@ -140,23 +122,7 @@ export default async function login(ctx) {
     }, { loadingLabel: 'Memverifikasi…' });
   });
 
-  const side = el('aside', { class: 'auth-side' },
-    el('div', { class: 'brand' },
-      el('span', { class: 'brand__mark', html: BRAND_MARK_SVG }),
-      el('span', { class: 'brand__name', text: 'FINZZ' }),
-      el('span', { class: 'brand__badge', text: 'STORE' })
-    ),
-    el('p', { class: 'auth-side__quote', text: '“Satu akun untuk nomor virtual, saldo, dan seluruh riwayat OTP Anda.”' }),
-    el('ul', { class: 'auth-list' },
-      el('li', {}, icon('check', { size: 16 }), el('span', { text: 'OTP hanya terlihat oleh pemilik order melalui sesi server.' })),
-      el('li', {}, icon('check', { size: 16 }), el('span', { text: 'Setiap pemotongan saldo tercatat pada ledger yang tidak dapat diubah.' })),
-      el('li', {}, icon('check', { size: 16 }), el('span', { text: 'Refund otomatis bila nomor tidak pernah menerima OTP.' }))
-    )
-  );
-
-  const node = el('div', {}, layout.header({ variant: 'public' }),
-    el('div', { class: 'auth-layout' }, el('div', { class: 'auth-panel' }, form), side)
-  );
+  const node = authPageShell({ layout, form, mode: 'login' });
 
   return { node, title: 'Masuk — FINZZ Store' };
 }

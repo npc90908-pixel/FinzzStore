@@ -160,15 +160,25 @@ export default async function landing(ctx) {
 
   const listBrands = (apps) => {
     const brands = marqueeBrands(apps);
-    if (brands.length < 4) return;
+    if (!brands.length) return;
     marqueeSection.removeAttribute('hidden');
-    const rows = splitRows(brands, 2);
+    const rows = brands.length < 4 ? [brands] : splitRows(brands, 2).filter((row) => row.length);
     marqueeSection.replaceChildren(
       ...rows.map((row, index) => {
-        const track = el('div', { class: `brand-marquee__track brand-marquee__track--${index % 2 === 0 ? 'left' : 'right'}` });
-        // A second, assistive-tech-hidden visual copy creates the seamless loop.
-        // `row` itself is deduplicated by app id, so no extra service/inventory
-        // is introduced by the animation.
+        // Estimate the real chip width so even a short live catalogue fills the
+        // viewport. Every extra group is an aria-hidden visual loop copy only.
+        const groupWidth = row.reduce((width, brand) => width + 96 + brand.label.length * 7.2, 0) + 14;
+        const viewportWidth = Math.max(
+          320,
+          Number(document.documentElement?.clientWidth) || Number(window.innerWidth) || 1024
+        );
+        const cycleGroups = Math.max(2, Math.ceil(viewportWidth / Math.max(groupWidth, 1)) + 1);
+        const copies = cycleGroups * 2;
+        const duration = Math.max(18, (cycleGroups * groupWidth) / 26);
+        const track = el('div', {
+          class: `brand-marquee__track brand-marquee__track--${index % 2 === 0 ? 'left' : 'right'}`,
+          style: { '--marquee-duration': `${duration.toFixed(1)}s` }
+        });
         const group = (hiddenCopy) => el('div', {
           class: 'brand-marquee__group',
           attrs: hiddenCopy ? { 'aria-hidden': 'true' } : {}
@@ -185,7 +195,7 @@ export default async function landing(ctx) {
             style: { '--float-delay': `${(itemIndex % 5) * -0.55}s` }
           }, content);
         }));
-        track.replaceChildren(group(false), group(true));
+        for (let copy = 0; copy < copies; copy += 1) track.appendChild(group(copy > 0));
         return el('div', { class: 'brand-marquee__row' }, track);
       })
     );
