@@ -369,6 +369,9 @@
   border: 1px solid var(--border);
   font-weight: var(--weight-bold); font-size: var(--text-sm);
 }
+.service-card__logo img { width: 23px; height: 23px; object-fit: contain; }
+html[data-theme="dark"] .service-card__logo img[src$="/x.svg"] { filter: invert(1); }
+html[data-theme="light"] .service-card__logo img[src$="/x.svg"] { filter: none; }
 .service-card__name { font-weight: var(--weight-semibold); font-size: var(--text-sm); }
 .service-card__meta { font-size: var(--text-xs); color: var(--text-dim); }
 .service-card__price { font-size: var(--text-md); font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; }
@@ -520,15 +523,25 @@
 
 .brand-marquee__track {
   display: flex;
-  gap: 14px;
   align-items: center;
   width: max-content;
   animation: brand-scroll-left 38s linear infinite;
+  will-change: transform;
 }
 
 .brand-marquee__track--right {
   animation-name: brand-scroll-right;
   animation-duration: 46s;
+}
+
+/* Equal-width groups make the -50% reset genuinely seamless, including the gap. */
+.brand-marquee__group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: max-content;
+  padding-right: 14px;
+  flex: 0 0 auto;
 }
 
 @keyframes brand-scroll-left {
@@ -556,15 +569,25 @@
   backdrop-filter: var(--blur-1);
   -webkit-backdrop-filter: var(--blur-1);
   transition: border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  animation: brand-chip-float 4.8s ease-in-out infinite;
+  animation-delay: var(--float-delay, 0s);
+  will-change: translate;
+}
+@keyframes brand-chip-float {
+  0%, 100% { translate: 0 -2px; }
+  50% { translate: 0 2px; }
 }
 .brand-chip:hover { border-color: var(--border-strong); color: var(--text); }
 
 .brand-chip__logo {
   width: 22px;
   height: 22px;
-  color: inherit;
-  opacity: 0.92;
+  object-fit: contain;
+  opacity: 0.96;
 }
+/* X's official mark is black/white; invert its black SVG on the dark surface. */
+html[data-theme="dark"] .brand-chip__logo[src$="/x.svg"] { filter: invert(1); }
+html[data-theme="light"] .brand-chip__logo[src$="/x.svg"] { filter: none; }
 
 .brand-chip__wordmark {
   font-size: 12px;
@@ -579,14 +602,18 @@
   color: var(--text);
 }
 
-.brand-marquee:hover .brand-marquee__track {
+.brand-marquee:hover .brand-marquee__track,
+.brand-marquee:hover .brand-chip {
   animation-play-state: paused;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .brand-marquee__track {
+  .brand-marquee__track,
+  .brand-chip {
     animation: none;
     transform: none;
+    translate: none;
+    will-change: auto;
   }
   .brand-marquee__row {
     overflow-x: auto;

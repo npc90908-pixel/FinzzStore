@@ -32,7 +32,7 @@ export default async function profilePage(ctx) {
 
     profileForm.append(
       el('div', { class: 'form-grid form-grid--2' },
-        Input({ label: 'Email', name: 'email', type: 'email', value: profile.email, disabled: true, hint: 'Email dikelola oleh penyedia autentikasi.' }),
+        Input({ label: 'Email', name: 'email', type: 'email', value: profile.email, disabled: true, hint: 'Email menjadi identitas akun dan tidak dapat diubah dari halaman ini.' }),
         Input({ label: 'Username', name: 'username', value: profile.username || '', placeholder: 'huruf, angka, garis bawah', maxlength: 24 }),
         Input({ label: 'Nama lengkap', name: 'full_name', value: profile.fullName || '', placeholder: 'Nama sesuai identitas', maxlength: 80 }),
         Input({ label: 'Nomor telepon', name: 'phone', value: profile.phone || '', placeholder: '08xx', maxlength: 20 })

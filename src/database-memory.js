@@ -575,6 +575,11 @@ export function createMemoryDatabase({ logger } = {}) {
         const p = store.profiles.get(id);
         if (p) p.last_seen_at = nowIso();
       },
+      async markEmailVerified(id) {
+        const p = store.profiles.get(id);
+        if (p && !p.email_verified_at) p.email_verified_at = nowIso();
+        return { ok: Boolean(p) };
+      },
       async list({ search = '', role = null, status = null, limit = 25, offset = 0 } = {}) {
         let rows = [...store.profiles.values()];
         if (search) {

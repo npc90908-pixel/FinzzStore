@@ -4,11 +4,117 @@
 // codes and reset tokens never appear in any response or log.
 // ============================================================================
 import * as v from '../validation.js';
-import { setSessionCookies, setCsrfCookie, clearSessionCookies, sendNoContent, setVerifyCookie, clearVerifyCookie } from '../http.js';
+import { setSessionCookies, setCsrfCookie, clearSessionCookies, sendNoContent, setVerifyCookie, clearVerifyCookie, appendCookies } from '../http.js';
 import { enforceLimit, ok, created } from './helpers.js';
 import { AppError, errors } from '../errors.js';
+import { randomToken } from '../auth/security.js';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { serializeCookie, clearCookie } from '../security.js';
+import { safeReturnPath } from '../validation.js';
+
+const OAUTH_STATE_COOKIE = 'fz_oauth_state';
+const OAUTH_NEXT_COOKIE = 'fz_oauth_next';
+const OAUTH_VERIFIER_COOKIE = 'fz_oauth_verifier';
+const OAUTH_STATE_TTL_SECONDS = 600;
 
 export function registerAuthRoutes({ router }) {
+
+  // ------------------------------------------------------------ Google OAuth
+  // Both endpoints are GET navigations (browser → Google → browser), so they
+  // carry no CSRF token: the signed/state cookie below is the CSRF defence.
+  router.get(
+    '/api/auth/google',
+    async (ctx) => {
+      const oauth = ctx.services.googleOAuth;
+      if (!oauth?.available) throw errors.notFound('Login Google belum dikonfigurasi.');
+      await enforceLimit(ctx, `oauth:start:${ctx.ip}`, 15, 10 * 60);
+
+      const state = randomToken(24);
+      const codeVerifier = randomToken(32);
+      const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
+      const next = safeReturnPath(ctx.query.get('next'));
+      appendCookies(ctx.res, [
+        serializeCookie(OAUTH_STATE_COOKIE, state, {
+          secure: ctx.config.cookie.secure,
+          sameSite: 'Lax',
+          path: '/',
+          httpOnly: true,
+          maxAge: OAUTH_STATE_TTL_SECONDS
+        }),
+        serializeCookie(OAUTH_NEXT_COOKIE, next, {
+          secure: ctx.config.cookie.secure,
+          sameSite: 'Lax',
+          path: '/',
+          httpOnly: true,
+          maxAge: OAUTH_STATE_TTL_SECONDS
+        }),
+        serializeCookie(OAUTH_VERIFIER_COOKIE, codeVerifier, {
+          secure: ctx.config.cookie.secure,
+          sameSite: 'Lax',
+          path: '/',
+          httpOnly: true,
+          maxAge: OAUTH_STATE_TTL_SECONDS
+        })
+      ]);
+      ctx.res.writeHead(302, { Location: oauth.authorizeUrl({ state, codeChallenge }), 'Cache-Control': 'no-store' });
+      ctx.res.end();
+    },
+    { public: true }
+  );
+
+  router.get(
+    '/api/auth/google/callback',
+    async (ctx) => {
+      const oauth = ctx.services.googleOAuth;
+      const clearOauthCookies = () => appendCookies(ctx.res, [
+        clearCookie(OAUTH_STATE_COOKIE, {
+          secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true
+        }),
+        clearCookie(OAUTH_NEXT_COOKIE, {
+          secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true
+        }),
+        clearCookie(OAUTH_VERIFIER_COOKIE, {
+          secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true
+        })
+      ]);
+      const backToLogin = (reason) => {
+        clearOauthCookies();
+        ctx.res.writeHead(302, { Location: `/login?oauth=${encodeURIComponent(reason)}`, 'Cache-Control': 'no-store' });
+        ctx.res.end();
+      };
+      if (!oauth?.available) return backToLogin('unavailable');
+
+      const code = ctx.query.get('code') || '';
+      const state = ctx.query.get('state') || '';
+      const expectedState = ctx.cookies[OAUTH_STATE_COOKIE] || '';
+      const codeVerifier = ctx.cookies[OAUTH_VERIFIER_COOKIE] || '';
+      const providerError = ctx.query.get('error');
+      const stateBytes = Buffer.from(state);
+      const expectedBytes = Buffer.from(expectedState);
+      const stateMatches = stateBytes.length > 0
+        && stateBytes.length === expectedBytes.length
+        && timingSafeEqual(stateBytes, expectedBytes);
+      if (!stateMatches || !codeVerifier) return backToLogin('state');
+      if (providerError) return backToLogin('denied');
+      if (!code) return backToLogin('state');
+
+      try {
+        const identity = await oauth.authenticate(code, codeVerifier);
+        const result = await ctx.services.auth.loginWithProvider({ ...identity, req: ctx.req });
+        setSessionCookies(ctx.res, ctx.config, result);
+        clearOauthCookies();
+        const next = safeReturnPath(ctx.cookies[OAUTH_NEXT_COOKIE]);
+        ctx.res.writeHead(302, { Location: next, 'Cache-Control': 'no-store' });
+        ctx.res.end();
+      } catch (err) {
+        ctx.logger?.warn?.('google oauth callback failed', { code: err?.code || null });
+        const reason = err?.code === 'OAUTH_EMAIL_UNVERIFIED' ? 'unverified' : 'failed';
+        return backToLogin(reason);
+      }
+    },
+    { public: true }
+  );
+
 
   router.post(
     '/api/auth/register',

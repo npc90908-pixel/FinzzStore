@@ -490,7 +490,11 @@ function ensureToastRegion() {
   return toastRegion;
 }
 
-export function toast({ type = 'info', title, message = null, timeout = 5200 }) {
+export function toast(options) {
+  // Tolerate the legacy `toast('Pesan…')` call shape: a string first argument
+  // is treated as the title instead of being destructured into undefined.
+  const normalized = typeof options === 'string' ? { title: options } : (options || {});
+  const { type = 'info', title, message = null, timeout = 5200 } = normalized;
   const region = ensureToastRegion();
   const iconFor = { success: 'check', error: 'alert', warning: 'alert', info: 'info' };
   const node = el(

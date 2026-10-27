@@ -47,6 +47,58 @@ test('health endpoint reports database and supplier state', async () => {
   assert.ok(!response.text.includes('service_role'), 'health must not leak secrets');
 });
 
+test('Google OAuth uses a state cookie, creates a verified session, and returns only to a safe local path', async () => {
+  const oauthHarness = await startTestApp({ env: {
+    APP_URL: 'http://127.0.0.1:0',
+    GOOGLE_CLIENT_ID: 'test-client-id',
+    GOOGLE_CLIENT_SECRET: 'test-client-secret',
+    GOOGLE_REDIRECT_URI: 'http://127.0.0.1:0/api/auth/google/callback'
+  } });
+  const client = oauthHarness.client();
+  try {
+    oauthHarness.services.googleOAuth.authenticate = async (code, codeVerifier) => {
+      assert.equal(code, 'fake-google-code');
+      assert.ok(codeVerifier, 'PKCE verifier stays in an HttpOnly server cookie until the callback');
+      return { provider: 'google', providerSubject: 'google-subject', email: 'oauth.created@finzz.test', name: 'Akun Google' };
+    };
+
+    const firstStart = await client.get('/api/auth/google?next=%2Fwallet%3Fpage%3D2');
+    assert.equal(firstStart.status, 302);
+    const authorizeUrl = new URL(firstStart.headers.get('location'));
+    assert.equal(authorizeUrl.origin, 'https://accounts.google.com');
+    assert.equal(authorizeUrl.searchParams.get('client_id'), 'test-client-id');
+    assert.equal(authorizeUrl.searchParams.get('code_challenge_method'), 'S256');
+    assert.ok(authorizeUrl.searchParams.get('code_challenge'));
+    assert.ok(client.cookies().fz_oauth_verifier);
+    const invalidState = await client.get('/api/auth/google/callback?code=fake-google-code&state=not-the-state');
+    assert.equal(invalidState.status, 302);
+    assert.equal(invalidState.headers.get('location'), '/login?oauth=state');
+    assert.equal(client.cookies().fz_oauth_state, undefined, 'one-time state cookies are cleared after failure');
+    assert.equal(client.cookies().fz_oauth_verifier, undefined, 'PKCE verifier is cleared after failure');
+
+    const secondStart = await client.get('/api/auth/google?next=%2Fwallet%3Fpage%3D2');
+    const state = new URL(secondStart.headers.get('location')).searchParams.get('state');
+    assert.ok(state);
+    assert.ok(client.cookies().fz_oauth_next);
+    const callback = await client.get(`/api/auth/google/callback?code=fake-google-code&state=${encodeURIComponent(state)}`);
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.get('location'), '/wallet?page=2');
+    assert.equal(callback.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(client.cookies().fz_oauth_state, undefined);
+    assert.equal(client.cookies().fz_oauth_next, undefined);
+    assert.equal(client.cookies().fz_oauth_verifier, undefined);
+
+    const session = await client.get('/api/auth/session');
+    assert.equal(session.status, 200);
+    assert.equal(session.json.user.email, 'oauth.created@finzz.test');
+    const profile = [...oauthHarness.db.store.profiles.values()].find((row) => row.email === 'oauth.created@finzz.test');
+    assert.ok(profile.email_verified_at, 'Google-verified account enters the app as verified');
+    assert.equal(profile.full_name, 'Akun Google');
+  } finally {
+    await oauthHarness.close();
+  }
+});
+
 test('landing page is public and ships no secrets or invented statistics', async () => {
   const response = await h.client().get('/');
   assert.equal(response.status, 200);

@@ -6,8 +6,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setupDom, installFetch, FIXTURES, catalogFixture } from './support/dom-env.mjs';
+import { turnstileConfig } from '../public/js/turnstile.js';
 
 const page = (name) => import(`../public/js/pages/${name}.js`).then((m) => m.default);
+
+test('Turnstile public settings are read from the real /api/public/config app envelope', () => {
+  assert.deepEqual(
+    turnstileConfig({ app: { turnstile: { enabled: true, siteKey: 'public-key' } } }),
+    { enabled: true, siteKey: 'public-key' }
+  );
+  assert.deepEqual(turnstileConfig({ app: { turnstile: { enabled: false, siteKey: '' } } }), { enabled: false, siteKey: '' });
+});
 
 const walletFixture = () => ({
   balance: 96780,
@@ -122,13 +131,13 @@ function baseRoutes(extra = []) {
   ];
 }
 
-function makeCtx({ user = { id: 'u1', email: 'user@finzz.test', role: 'admin' }, pathname = '/', search = '', api } = {}) {
+function makeCtx({ user = { id: 'u1', email: 'user@finzz.test', role: 'admin' }, pathname = '/', search = '', api, publicSettings = FIXTURES.config } = {}) {
   const { createStore } = globalThis.__finzzStore;
   const store = createStore({
     user,
     config: FIXTURES.config,
     csrfToken: 'csrf-token',
-    publicSettings: FIXTURES.config,
+    publicSettings,
     balance: 96780,
     theme: 'dark'
   });
@@ -143,7 +152,7 @@ function makeCtx({ user = { id: 'u1', email: 'user@finzz.test', role: 'admin' },
     refreshSession: async () => user,
     refreshBalance: async () => 96780,
     ApiError: globalThis.__finzzApiError,
-    loadPublicSettings: async () => FIXTURES.config,
+    loadPublicSettings: async () => publicSettings,
     key: pathname === '/' ? 'landing' : pathname.slice(1),
     query: new URLSearchParams(search),
     pathname,
@@ -169,6 +178,28 @@ test('page modules render against a DOM with fixtures', async () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 25));
 
   try {
+    // ------------------------------------------------------------------ login
+    {
+      const ctx = makeCtx({ api, user: null, pathname: '/login' });
+      const rendered = await (await page('login'))(ctx);
+      assert.ok(!rendered.node.outerHTML.includes('>null<'), 'empty optional content never leaks a visible "null"');
+      assert.equal(rendered.node.querySelector('.oauth-login__button'), null, 'Google sign-in is hidden when OAuth is not configured');
+      rendered.cleanup?.();
+    }
+    {
+      const publicSettings = {
+        ...FIXTURES.config,
+        app: { ...FIXTURES.config.app, turnstile: { enabled: false, siteKey: '' }, oauth: { google: true } }
+      };
+      const ctx = makeCtx({ api, user: null, pathname: '/login', search: 'oauth=denied&next=%2Fwallet', publicSettings });
+      const rendered = await (await page('login'))(ctx);
+      const googleButton = rendered.node.querySelector('.oauth-login__button');
+      assert.ok(googleButton, 'Google sign-in appears only for a configured OAuth integration');
+      assert.equal(googleButton.getAttribute('href'), '/api/auth/google?next=%2Fwallet');
+      assert.match(rendered.node.textContent, /Login Google dibatalkan/i);
+      rendered.cleanup?.();
+    }
+
     // ---------------------------------------------------------------- landing
     {
       const ctx = makeCtx({ api, user: null, pathname: '/' });

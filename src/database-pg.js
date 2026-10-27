@@ -210,6 +210,14 @@ export function createPgDatabase(config, { logger } = {}) {
       async touch(id) {
         await query('update public.profiles set last_seen_at = now() where id = $1', [id], { table: 'profiles' });
       },
+      /** OAuth login: the provider already proved ownership of the email. */
+      async markEmailVerified(id) {
+        await query(
+          'update public.profiles set email_verified_at = coalesce(email_verified_at, now()) where id = $1',
+          [id], { table: 'profiles' }
+        );
+        return { ok: true };
+      },
       async list({ search = '', role = null, status = null, limit = 25, offset = 0 } = {}) {
         const where = [];
         const values = [];

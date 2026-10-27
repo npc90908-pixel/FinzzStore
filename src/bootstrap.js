@@ -7,6 +7,7 @@ import { loadConfig } from './config.js';
 import { createPgDatabase } from './database-pg.js';
 import { createMemoryDatabase } from './database-memory.js';
 import { createAuthService } from './auth-local.js';
+import { createGoogleOAuth } from './auth-google.js';
 import { createMailer } from './auth/mailer.js';
 import { createTurnstileVerifier, hashPassword } from './auth/security.js';
 import { createSettingsService } from './settings.js';
@@ -52,6 +53,7 @@ export async function createApplication({ env = process.env, logger, supplierOpt
   const mailer = createMailer(config, { logger });
   const turnstile = createTurnstileVerifier(config, { logger });
   const auth = createAuthService({ db, config, logger, mailer, turnstile });
+  const googleOAuth = createGoogleOAuth(config, { logger });
 
   const supplier = config.supplier.mode === 'mock'
     ? createMockSupplier({ logger, ...(supplierOptions || {}) })
@@ -67,7 +69,7 @@ export async function createApplication({ env = process.env, logger, supplierOpt
   const notifications = createNotificationService({ db, logger });
 
   const services = {
-    settings, auth, supplier, catalog, orders, wallet, deposits, payment, notifications,
+    settings, auth, googleOAuth, supplier, catalog, orders, wallet, deposits, payment, notifications,
     jobsState, rateLimiter, db, config
   };
 

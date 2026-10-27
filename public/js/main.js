@@ -300,7 +300,7 @@ async function bootstrap() {
     const anchor = event.target.closest?.('a[href]');
     if (!anchor) return;
     if (anchor.target && anchor.target !== '_self') return;
-    if (anchor.hasAttribute('download')) return;
+    if (anchor.hasAttribute('download') || anchor.hasAttribute('data-native-navigation')) return;
     const href = anchor.getAttribute('href');
     if (!href || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:')) return;
     if (href.startsWith('#') || href.startsWith('/#')) return;

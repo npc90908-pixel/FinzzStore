@@ -96,7 +96,8 @@ export default async function walletPage(ctx) {
             )
           )
         : Alert({ tone: 'warning', title: 'Rekening belum diatur', children: 'Administrator belum mengisi rekening tujuan. Hubungi dukungan sebelum melakukan transfer.' }),
-      policy.instructions ? el('p', { class: 'text-sm text-muted', text: policy.instructions }) : null,
+      // Native append() stringifies a bare null into a visible "null" text node.
+      ...(policy.instructions ? [el('p', { class: 'text-sm text-muted', text: policy.instructions })] : []),
       amountInput,
       upload.zone,
       upload.preview,

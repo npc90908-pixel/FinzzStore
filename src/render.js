@@ -19,6 +19,16 @@ export function renderDocument({
 }) {
   const title = meta?.title || 'FINZZ Store';
   const description = meta?.description || 'FINZZ Store — platform nomor virtual (nokos).';
+  const appUrl = state?.config?.appUrl || 'http://localhost:3000';
+  const canonicalPath = String(state?.path || '/').split(/[?#]/, 1)[0] || '/';
+  let canonicalUrl = appUrl;
+  let ogImageUrl = '/assets/og-finzz.png';
+  try {
+    canonicalUrl = new URL(canonicalPath, appUrl).href;
+    ogImageUrl = new URL('/assets/og-finzz.png', appUrl).href;
+  } catch {
+    // A malformed test/development APP_URL should not break shell rendering.
+  }
   const bootState = {
     page: page || 'not-found',
     path: state?.path || '/',
@@ -40,10 +50,26 @@ export function renderDocument({
 <title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(description)}">
 <meta name="robots" content="${meta?.requiresAuth ? 'noindex, nofollow' : 'index, follow'}">
+<link rel="canonical" href="${escapeHtml(canonicalUrl)}">
+<meta property="og:site_name" content="FINZZ Store">
+<meta property="og:locale" content="id_ID">
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(description)}">
 <meta property="og:type" content="website">
-<link rel="icon" href="/assets/svg/logo.svg" type="image/svg+xml">
+<meta property="og:url" content="${escapeHtml(canonicalUrl)}">
+<meta property="og:image" content="${escapeHtml(ogImageUrl)}">
+<meta property="og:image:secure_url" content="${escapeHtml(ogImageUrl)}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="FINZZ Store — nomor virtual, lebih simpel.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escapeHtml(title)}">
+<meta name="twitter:description" content="${escapeHtml(description)}">
+<meta name="twitter:image" content="${escapeHtml(ogImageUrl)}">
+<link rel="icon" href="/assets/svg/favicon.svg" type="image/svg+xml" sizes="any">
+<link rel="icon" href="/assets/svg/favicon.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/svg/apple-touch-icon.png">
 ${CSS_FILES.map((href) => `<link rel="stylesheet" href="${href}">`).join('\n')}
 <script type="application/json" id="finzz-state" nonce="${nonce}">${safeJsonForHtml(bootState)}</script>
 <script type="module" src="/js/main.js" nonce="${nonce}"></script>
@@ -53,12 +79,12 @@ ${CSS_FILES.map((href) => `<link rel="stylesheet" href="${href}">`).join('\n')}
 <div id="app-root" data-page="${escapeHtml(page || 'not-found')}">
   <div class="boot-splash" role="status" aria-live="polite">
     <div class="boot-splash__logo" aria-hidden="true">
-      <svg viewBox="0 0 48 48" width="44" height="44" role="img" aria-label="FINZZ Store">
-        <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#2ee6b6"/>
-        </linearGradient></defs>
-        <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#bg)"/>
-        <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#06070d"/>
+      <svg viewBox="0 0 48 48" width="44" height="44" role="img" aria-label="FINZZ Store" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1.5" y="1.5" width="45" height="45" rx="15" fill="#101522" stroke="rgba(148,163,198,.22)" stroke-width="1.2"/>
+        <rect x="5.5" y="5.5" width="37" height="37" rx="12" fill="#151d30"/>
+        <path d="M16 34V18a5 5 0 0 1 5-5h12.5" fill="none" stroke="#7c8cff" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M16.4 23.5h12.2" fill="none" stroke="#2ee6b6" stroke-width="4.6" stroke-linecap="round"/>
+        <circle cx="33.7" cy="33.1" r="2.8" fill="#2ee6b6"/>
       </svg>
     </div>
     <p class="boot-splash__text">Memuat FINZZ Store…</p>
