@@ -43,7 +43,7 @@ GitHub → Settings → Secrets and variables → Actions:
 | `VERCEL_ORG_ID` | `team_BOLzu0FwElfirJfuk38cIl7S` |
 | `VERCEL_PROJECT_ID` | `prj_4DpvuoYYo6ceyeeZGpkyJPVmNvDE` |
 | `DATABASE_URL_MIGRATE` | connection string **sesi** (port 5432), bukan 6543 |
-| `DATABASE_SSL` | `no-verify` (lihat alasan di `ENV-PRODUKSI.md` §2) |
+| `DATABASE_SSL` | Opsional; produksi memakai TLS ketat secara default. Gunakan `no-verify` hanya jika host mewajibkan (sertifikat tidak divalidasi). |
 | `CRON_SECRET` | nilai yang sama dengan di Vercel |
 | `PRODUCTION_URL` | `https://finzzstore.nightvale.xyz` |
 

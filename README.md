@@ -157,8 +157,8 @@ Nilai wajib di produksi: `NODE_ENV=production`, `APP_URL` (https),
 OAuth bersifat opsional: fitur hidup hanya setelah seluruh pasangan kredensialnya
 terisi, dan UI menyembunyikan integrasi yang belum dikonfigurasi.
 
-Lihat `.env.example` untuk variabel penting dan `ENV-PRODUKSI.md` untuk seluruh
-default, pengaturan deployment, serta troubleshooting.
+Lihat `.env.example` untuk variabel penting dan `src/config.js` untuk default
+serta validasi konfigurasi yang berlaku.
 
 ### 3.4 Process manager and tunnel
 
