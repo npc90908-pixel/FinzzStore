@@ -74,6 +74,7 @@ export function createMemoryDatabase({ logger } = {}) {
     leases: new Map(),
     cronLocks: new Map(),
     webhooks: new Map(),
+    paymentWebhookEvents: new Map(),
     catalogRuns: [],
     notifications: [],
     // custom-auth one-time tokens (email verification / password reset)
@@ -1202,6 +1203,15 @@ export function createMemoryDatabase({ logger } = {}) {
           status: 'pending',
           method: 'manual_transfer',
           unique_code: null,
+          provider_reference: null,
+          provider_order_id: null,
+          checkout_url: null,
+          qris_payload: null,
+          pay_amount: null,
+          fee_amount: 0,
+          provider_status: null,
+          expires_at: null,
+          paid_at: null,
           proof_path: proofPath,
           proof_mime: proofMime,
           proof_size: proofSize,
@@ -1216,6 +1226,138 @@ export function createMemoryDatabase({ logger } = {}) {
         store.deposits.set(row.id, row);
         return { deposit: structuredClone(row) };
       },
+      async createGateway(params) {
+        const { userId, amount, reference, minAmount, maxAmount, maxPending = 3, expiresIn = 600 } = params;
+        if (!Number.isSafeInteger(amount) || amount <= 0) throw appErrorFromCode('INVALID_AMOUNT');
+        const effectiveMinimum = Math.max(MINIMUM_TOPUP_AMOUNT, Number(minAmount) || MINIMUM_TOPUP_AMOUNT);
+        if (amount < effectiveMinimum) throw appErrorFromCode('DEPOSIT_BELOW_MINIMUM');
+        if (amount > maxAmount || amount > 100_000_000) throw appErrorFromCode('DEPOSIT_ABOVE_MAXIMUM');
+        if (!/^[A-Za-z0-9_-]{8,100}$/.test(String(reference || ''))) throw appErrorFromCode('INVALID_INPUT');
+        if (!Number.isInteger(expiresIn) || expiresIn < 300 || expiresIn > 600) throw appErrorFromCode('INVALID_INPUT');
+        return withLock(`gateway-deposit-user:${userId}`, async () => {
+          if ([...store.deposits.values()].some((d) => d.provider_reference === reference)) throw appErrorFromCode('PAYMENT_ORDER_MISMATCH');
+          const pending = [...store.deposits.values()].filter((d) => d.user_id === userId && d.status === 'pending');
+          if (pending.length >= maxPending) throw appErrorFromCode('TOO_MANY_PENDING_DEPOSITS');
+          const createdAt = nowIso();
+          const row = {
+            id: randomUUID(), user_id: userId, amount, approved_amount: null,
+            status: 'pending', method: 'gateway', unique_code: null,
+            provider_reference: reference, provider_order_id: null, checkout_url: null,
+            qris_payload: null, pay_amount: null, fee_amount: 0,
+            provider_status: 'creating',
+            expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(), paid_at: null,
+            proof_path: null, proof_mime: null, proof_size: null, proof_sha256: null,
+            user_note: null, admin_note: null, reviewed_by: null, reviewed_at: null,
+            created_at: createdAt, updated_at: createdAt
+          };
+          store.deposits.set(row.id, row);
+          return { deposit: structuredClone(row) };
+        });
+      },
+      async storeGatewayInvoice(params) {
+        const deposit = store.deposits.get(params.depositId);
+        if (!deposit || deposit.method !== 'gateway' || deposit.provider_reference !== params.reference) {
+          throw appErrorFromCode('PAYMENT_ORDER_MISMATCH');
+        }
+        return withLock(`gateway-deposit:${deposit.id}`, async () => {
+          const current = store.deposits.get(deposit.id);
+          if (!['pending', 'approved'].includes(current.status)) throw appErrorFromCode('DEPOSIT_ALREADY_REVIEWED');
+          if (current.provider_order_id && current.provider_order_id !== params.providerOrderId) throw appErrorFromCode('PAYMENT_ORDER_MISMATCH');
+          const conflict = [...store.deposits.values()].some((d) => d.id !== current.id && d.provider_order_id === params.providerOrderId);
+          if (conflict || params.feeAmount !== 0 || !Number.isSafeInteger(params.payAmount)
+              || params.payAmount < Number(current.amount)) {
+            throw appErrorFromCode('PAYMENT_AMOUNT_MISMATCH');
+          }
+          Object.assign(current, {
+            provider_order_id: params.providerOrderId,
+            checkout_url: params.checkoutUrl,
+            qris_payload: params.qris,
+            pay_amount: params.payAmount,
+            fee_amount: params.feeAmount,
+            provider_status: 'pending',
+            expires_at: params.expiresAt,
+            updated_at: nowIso()
+          });
+          return { deposit: structuredClone(current) };
+        });
+      },
+      async findGatewayByReference(reference) {
+        const deposit = [...store.deposits.values()].find((d) => d.provider_reference === reference && d.method === 'gateway');
+        return deposit ? structuredClone(deposit) : null;
+      },
+      async listPendingGateway({ limit = 10 } = {}) {
+        const rows = [...store.deposits.values()]
+          .filter((d) => d.method === 'gateway' && d.status === 'pending')
+          .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+          .slice(0, limit)
+          .map((d) => structuredClone(d));
+        return { rows };
+      },
+      async confirmGatewayPayment(params) {
+        if (!/^[a-f0-9]{64}$/.test(String(params.eventId || ''))
+            || !['order.paid', 'reconciliation.paid'].includes(params.eventType)) throw appErrorFromCode('INVALID_INPUT');
+        const existing = [...store.deposits.values()].find((d) => d.provider_reference === params.reference && d.method === 'gateway');
+        if (!existing) throw appErrorFromCode('DEPOSIT_NOT_FOUND');
+        return withLock(`gateway-deposit:${existing.id}`, async () => withLock(`wallet:${existing.user_id}`, async () => {
+          const deposit = store.deposits.get(existing.id);
+          if (store.paymentWebhookEvents.has(params.eventId)) return { duplicate: true, credited: false, deposit: structuredClone(deposit) };
+          if (deposit.status === 'approved') {
+            if (deposit.provider_order_id !== params.providerOrderId || Number(deposit.approved_amount) !== params.baseAmount) {
+              throw appErrorFromCode('PAYMENT_ORDER_MISMATCH');
+            }
+            store.paymentWebhookEvents.set(params.eventId, { event_id: params.eventId, event_type: params.eventType, processed_at: nowIso() });
+            return { duplicate: true, credited: false, deposit: structuredClone(deposit) };
+          }
+          if (deposit.status !== 'pending') throw appErrorFromCode('DEPOSIT_ALREADY_REVIEWED');
+          const paidAtMs = Date.parse(params.paidAt);
+          const expiresAtMs = Date.parse(deposit.expires_at || '');
+          if (deposit.provider_order_id && deposit.provider_order_id !== params.providerOrderId
+              || Number(deposit.amount) !== params.baseAmount
+              || params.feeAmount !== 0
+              || !Number.isSafeInteger(params.payAmount)
+              || params.payAmount < params.baseAmount
+              || (deposit.pay_amount !== null && Number(deposit.pay_amount) !== params.payAmount)
+              || !Number.isFinite(paidAtMs)
+              || (Number.isFinite(expiresAtMs) && paidAtMs > expiresAtMs)
+              || paidAtMs > Date.now() + 5 * 60 * 1000) {
+            throw appErrorFromCode('PAYMENT_AMOUNT_MISMATCH');
+          }
+          const ledger = ledgerApply(
+            deposit.user_id, 'deposit', 'credit', params.baseAmount, 'deposit', deposit.id,
+            'Deposit AstraPay terverifikasi', null,
+            { provider: 'astrapay', provider_order_id: params.providerOrderId, reference: params.reference,
+              base_amount: params.baseAmount, fee_amount: params.feeAmount, pay_amount: params.payAmount, paid_at: params.paidAt }
+          );
+          Object.assign(deposit, {
+            status: 'approved', approved_amount: params.baseAmount, reviewed_by: null,
+            reviewed_at: nowIso(), paid_at: params.paidAt, provider_order_id: params.providerOrderId,
+            pay_amount: params.payAmount, fee_amount: params.feeAmount, provider_status: 'paid', updated_at: nowIso()
+          });
+          store.paymentWebhookEvents.set(params.eventId, {
+            event_id: params.eventId, event_type: params.eventType,
+            provider_order_id: params.providerOrderId, provider_reference: params.reference, processed_at: nowIso()
+          });
+          pushNotification({
+            userId: deposit.user_id, type: 'deposit.approved', severity: 'success',
+            title: 'Deposit disetujui',
+            body: `Deposit Rp${new Intl.NumberFormat('id-ID').format(params.baseAmount)} sudah masuk ke saldo Anda.`,
+            depositId: deposit.id, meta: { amount: params.baseAmount }
+          });
+          return { duplicate: false, credited: true, deposit: structuredClone(deposit), balance: ledger.balance_after };
+        }));
+      },
+      async closeGatewayDeposit(depositId, providerStatus) {
+        const deposit = store.deposits.get(depositId);
+        if (!deposit || deposit.method !== 'gateway') throw appErrorFromCode('DEPOSIT_NOT_FOUND');
+        if (!['expired', 'cancelled', 'canceled'].includes(providerStatus)) throw appErrorFromCode('INVALID_INPUT');
+        return withLock(`gateway-deposit:${depositId}`, async () => {
+          const current = store.deposits.get(depositId);
+          if (current.status === 'pending') {
+            Object.assign(current, { status: 'cancelled', provider_status: providerStatus, checkout_url: null, qris_payload: null, updated_at: nowIso() });
+          }
+          return { deposit: structuredClone(current) };
+        });
+      },
       async get(id) {
         const d = store.deposits.get(id);
         return d ? structuredClone(d) : null;
@@ -1225,6 +1367,14 @@ export function createMemoryDatabase({ logger } = {}) {
           .filter((d) => d.user_id === userId)
           .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
         return paginate(rows.map((r) => structuredClone(r)), { limit, offset });
+      },
+      async listPendingByUser(userId, { limit = 10 } = {}) {
+        const rows = [...store.deposits.values()]
+          .filter((d) => d.user_id === userId && d.status === 'pending')
+          .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+          .slice(0, limit)
+          .map((d) => structuredClone(d));
+        return { rows };
       },
       async adminList({ status = 'pending', limit = 30, offset = 0 } = {}) {
         let rows = [...store.deposits.values()];
@@ -1236,6 +1386,7 @@ export function createMemoryDatabase({ logger } = {}) {
         assertAdmin(adminId);
         const deposit = store.deposits.get(id);
         if (!deposit) throw appErrorFromCode('DEPOSIT_NOT_FOUND');
+        if (deposit.method === 'gateway') throw appErrorFromCode('PAYMENT_AUTO_REVIEW');
         if (deposit.status !== 'pending') throw appErrorFromCode('DEPOSIT_ALREADY_REVIEWED');
         const approved = amount ?? Number(deposit.amount);
         if (!Number.isFinite(approved) || approved <= 0 || approved > Number(deposit.amount)) {
@@ -1271,6 +1422,7 @@ export function createMemoryDatabase({ logger } = {}) {
         if (!reason) throw appErrorFromCode('INVALID_INPUT');
         const deposit = store.deposits.get(id);
         if (!deposit) throw appErrorFromCode('DEPOSIT_NOT_FOUND');
+        if (deposit.method === 'gateway') throw appErrorFromCode('PAYMENT_AUTO_REVIEW');
         if (deposit.status !== 'pending') throw appErrorFromCode('DEPOSIT_ALREADY_REVIEWED');
         deposit.status = 'rejected';
         deposit.reviewed_by = adminId;

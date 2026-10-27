@@ -1,5 +1,5 @@
 // ============================================================================
-// DEPOSITS — manual transfer flow (payment gateway stays disabled).
+// DEPOSITS — manual review and optional AstraPay gateway flows.
 //
 // Proof of transfer is validated by magic bytes (not the declared MIME type),
 // stored outside the public directory with a random name and mode 0600, and is
@@ -11,9 +11,9 @@ import path from 'node:path';
 import { AppError, errors } from './errors.js';
 import { decodeUpload } from './validation.js';
 import { fromDbAmount } from './money.js';
-import { normalizeDepositPolicy } from './deposit-policy.js';
+import { MAXIMUM_GATEWAY_TOPUP_AMOUNT, normalizeDepositPolicy } from './deposit-policy.js';
 
-export function createDepositService({ db, settings, config, logger }) {
+export function createDepositService({ db, settings, config, payment, logger }) {
   const storageRoot = path.resolve(config.storageDir);
   const depositDir = path.join(storageRoot, 'deposits');
 
@@ -32,7 +32,18 @@ export function createDepositService({ db, settings, config, logger }) {
     hasProof: Boolean(row.proof_path),
     proofMime: row.proof_mime,
     createdAt: row.created_at,
-    reviewedAt: row.reviewed_at
+    reviewedAt: row.reviewed_at,
+    payment: row.method === 'gateway' ? {
+      provider: 'astrapay',
+      reference: row.provider_reference,
+      payAmount: row.pay_amount === null || row.pay_amount === undefined ? null : fromDbAmount(row.pay_amount),
+      feeAmount: fromDbAmount(row.fee_amount),
+      checkoutUrl: row.status === 'pending' ? row.checkout_url : null,
+      qris: row.status === 'pending' ? row.qris_payload : null,
+      providerStatus: row.provider_status,
+      expiresAt: row.expires_at,
+      paidAt: row.paid_at
+    } : null
   });
 
   return {
@@ -43,11 +54,116 @@ export function createDepositService({ db, settings, config, logger }) {
       return {
         minAmount: fromDbAmount(policy.min_amount),
         maxAmount: fromDbAmount(policy.max_amount),
+        gatewayMaxAmount: Math.min(fromDbAmount(policy.max_amount), MAXIMUM_GATEWAY_TOPUP_AMOUNT),
         instructions: policy.instructions,
         bankAccounts: Array.isArray(policy.bank_accounts) ? policy.bank_accounts : [],
         expiryHours: policy.expiry_hours,
-        gatewayEnabled: false
+        gatewayEnabled: Boolean(payment?.enabled)
       };
+    },
+
+    async createGateway({ user, amount }) {
+      if (user.status !== 'active') throw errors.accountSuspended();
+      if (!payment?.enabled) throw new AppError('PAYMENT_GATEWAY_DISABLED', payment?.disabledMessage || 'Pembayaran otomatis belum aktif.', 503);
+      const policy = await this.policy();
+      if (!Number.isSafeInteger(amount) || amount < policy.minAmount || amount > policy.gatewayMaxAmount) {
+        throw amount < policy.minAmount ? errors.badRequest('Nominal deposit di bawah minimum.', 'DEPOSIT_BELOW_MINIMUM')
+          : amount > policy.gatewayMaxAmount ? errors.badRequest('Nominal deposit melebihi batas maksimum.', 'DEPOSIT_ABOVE_MAXIMUM')
+            : errors.badRequest('Nominal deposit tidak valid.', 'INVALID_AMOUNT');
+      }
+
+      const reference = `FZ-${randomUUID().replaceAll('-', '')}`;
+      const expiresIn = config.payment.astraPay.expiresIn;
+      const intent = await db.deposits.createGateway({
+        userId: user.id,
+        amount,
+        reference,
+        minAmount: policy.minAmount,
+        maxAmount: policy.gatewayMaxAmount,
+        maxPending: 3,
+        expiresIn
+      });
+
+      const webhookUrl = `${config.appUrl}/api/webhooks/astrapay`;
+      const redirectUrl = `${config.appUrl}/wallet?payment=${encodeURIComponent(reference)}`;
+      try {
+        const invoice = await payment.createPayment({ amount, reference, webhookUrl, redirectUrl });
+        const saved = await db.deposits.storeGatewayInvoice({
+          depositId: intent.deposit.id,
+          providerOrderId: invoice.providerOrderId,
+          reference,
+          payAmount: invoice.payAmount,
+          feeAmount: invoice.feeAmount,
+          checkoutUrl: invoice.checkoutUrl,
+          qris: invoice.qris,
+          expiresAt: invoice.expiresAt,
+          providerStatus: invoice.status
+        });
+        logger.info('AstraPay invoice created', { depositId: intent.deposit.id, reference, amount });
+        return {
+          deposit: toPublic(saved.deposit),
+          payment: {
+            provider: 'astrapay',
+            checkoutUrl: invoice.checkoutUrl,
+            qris: invoice.qris,
+            baseAmount: invoice.baseAmount,
+            payAmount: invoice.payAmount,
+            feeAmount: invoice.feeAmount,
+            expiresAt: invoice.expiresAt
+          }
+        };
+      } catch (error) {
+        logger.warn('AstraPay invoice creation did not complete; retaining the intent until expiry', {
+          depositId: intent.deposit.id,
+          code: error?.code || 'PAYMENT_CREATE_ERROR'
+        });
+        throw error;
+      }
+    },
+
+    async reconcileGatewayPending({ limit = 10 } = {}) {
+      if (!payment?.configured) return { checked: 0, credited: 0, expired: 0, skipped: 'unconfigured' };
+      const { rows } = await db.deposits.listPendingGateway({ limit });
+      let checked = 0;
+      let credited = 0;
+      let expired = 0;
+      for (const deposit of rows) {
+        try {
+          if (!deposit.provider_order_id) {
+            const expiresAt = Date.parse(deposit.expires_at || '');
+            if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+              await db.deposits.closeGatewayDeposit(deposit.id, 'expired');
+              expired += 1;
+            }
+            continue;
+          }
+          const remote = await payment.checkStatus(deposit.provider_order_id);
+          checked += 1;
+          const status = String(remote.status || '').toLowerCase();
+          if (status === 'paid') {
+            const paid = payment.validatePaidOrder(remote, {
+              providerOrderId: deposit.provider_order_id,
+              reference: deposit.provider_reference,
+              amount: fromDbAmount(deposit.amount),
+              payAmount: deposit.pay_amount === null ? null : fromDbAmount(deposit.pay_amount)
+            });
+            const eventId = createHash('sha256')
+              .update(`reconciliation:${paid.providerOrderId}:${paid.paidAt}`)
+              .digest('hex');
+            const result = await db.deposits.confirmGatewayPayment({ ...paid, eventId, eventType: 'reconciliation.paid' });
+            if (result.credited) credited += 1;
+          } else if (['expired', 'cancelled', 'canceled'].includes(status)) {
+            await db.deposits.closeGatewayDeposit(deposit.id, status);
+            expired += 1;
+          }
+        } catch (error) {
+          logger.warn('AstraPay reconciliation deferred', {
+            depositId: deposit.id,
+            code: error?.code || 'PAYMENT_RECONCILE_ERROR'
+          });
+        }
+      }
+      return { checked, credited, expired };
     },
 
     async create({ user, amount, proofBase64, note }) {

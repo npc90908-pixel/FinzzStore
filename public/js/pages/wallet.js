@@ -1,5 +1,5 @@
 // ============================================================================
-// WALLET — balance, manual deposit (proof upload), history.
+// WALLET — balance, manual and AstraPay deposit flows, history.
 // ============================================================================
 import { el, Button, Badge, Card, Table, Skeleton, EmptyState, Alert, toast, FileUpload, Input, Textarea, runWithLoading, fieldError, Pagination, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
@@ -22,7 +22,7 @@ export default async function walletPage(ctx) {
       iconName: 'wallet',
       tone: 'mint',
       title: 'Saldo & deposit',
-      subtitle: 'Semua perubahan saldo tercatat pada ledger. Deposit manual diverifikasi admin sebelum dikreditkan.',
+      subtitle: 'Semua perubahan saldo tercatat pada ledger. Deposit manual direview admin; AstraPay diverifikasi server sebelum dikreditkan.',
       actions: Button({ variant: 'outline', iconName: 'refresh', children: 'Muat ulang', onClick: () => load() })
     }),
     el('div', { class: 'grid grid--sidebar' },
@@ -48,7 +48,8 @@ export default async function walletPage(ctx) {
           el('span', { class: 'text-xs text-dim', text: `Diperbarui ${timeAgo(wallet.updatedAt)} · ${wallet.currency}` }),
           el('div', { class: 'pill-row' },
             el('span', { class: 'badge badge--neutral' }, el('span', { text: `${wallet.activeOrders.length} order aktif` })),
-            wallet.pendingDepositCount > 0 ? el('span', { class: 'badge badge--warning' }, el('span', { text: `${wallet.pendingDepositCount} deposit menunggu` })) : null
+            wallet.pendingDepositCount > 0 ? el('span', { class: 'badge badge--warning' }, el('span', { text: `${wallet.pendingDepositCount} deposit manual menunggu` })) : null,
+            wallet.pendingGatewayCount > 0 ? el('span', { class: 'badge badge--info' }, el('span', { text: `${wallet.pendingGatewayCount} invoice AstraPay` })) : null
           )
         ),
         wallet.paymentGateway?.enabled === false
@@ -137,12 +138,80 @@ export default async function walletPage(ctx) {
       }, { loadingLabel: 'Mengirim…' });
     });
 
-    policyArea.replaceChildren(
-      Card({ title: 'Deposit manual', subtitle: 'Bukti transfer diverifikasi admin' }, form),
-      Card({ title: 'Kebijakan refund' },
-        el('p', { class: 'text-sm text-muted', text: wallet.refundPolicy || 'Refund otomatis bila nomor tidak menerima OTP dan supplier menutup order.' })
-      )
+    const cards = [Card({ title: 'Deposit manual', subtitle: 'Bukti transfer diverifikasi admin' }, form)];
+    const pendingGateways = (wallet.pendingDeposits || []).filter((deposit) =>
+      deposit.method === 'gateway' && deposit.status === 'pending'
     );
+    if (wallet.paymentGateway?.enabled || pendingGateways.length) {
+      const gatewayMax = policy.gatewayMaxAmount || policy.maxAmount;
+      let gatewayForm = null;
+      if (wallet.paymentGateway?.enabled) {
+        gatewayForm = el('form', { class: 'stack', attrs: { novalidate: true } });
+        const gatewayError = el('div');
+        const gatewayAmountInput = Input({
+          label: 'Nominal saldo yang ingin masuk',
+          name: 'gateway_amount',
+          type: 'number',
+          inputMode: 'numeric',
+          min: policy.minAmount,
+          max: gatewayMax,
+          placeholder: String(policy.minAmount),
+          hint: `Minimal ${formatRupiah(policy.minAmount)} · maksimal ${formatRupiah(gatewayMax)}`
+        });
+        const gatewaySubmit = Button({ variant: 'primary', block: true, type: 'submit', children: 'Buat invoice AstraPay' });
+        gatewayForm.append(gatewayAmountInput, gatewayError, gatewaySubmit);
+        gatewayForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          gatewayError.replaceChildren();
+          const amount = Number(gatewayForm.elements.gateway_amount.value);
+          if (!Number.isSafeInteger(amount) || amount < policy.minAmount) {
+            return fieldError(gatewayForm, 'gateway_amount', `Nominal minimal ${formatRupiah(policy.minAmount)}.`);
+          }
+          if (amount > gatewayMax) return fieldError(gatewayForm, 'gateway_amount', `Nominal maksimal ${formatRupiah(gatewayMax)}.`);
+          await runWithLoading(gatewaySubmit, async () => {
+            try {
+              await api.post('/api/deposits/gateway', { amount });
+              toast({ type: 'success', title: 'Invoice AstraPay dibuat', message: 'Buka halaman pembayaran; saldo masuk setelah server memverifikasi pembayaran.' });
+              gatewayForm.reset();
+              await load();
+            } catch (err) {
+              gatewayError.replaceChildren(Alert({ tone: 'danger', title: 'Gagal membuat invoice', children: err instanceof ApiError ? err.message : 'Coba lagi.' }));
+            }
+          }, { loadingLabel: 'Menghubungi AstraPay…' });
+        });
+      }
+
+      const invoices = pendingGateways.map((pendingGateway) => pendingGateway.payment?.checkoutUrl
+          ? el('div', { class: 'stack' },
+              Alert({ tone: 'info', title: 'Invoice AstraPay menunggu pembayaran', children: 'Selesaikan pembayaran sebelum invoice kedaluwarsa. Nominal saldo tidak termasuk kode unik pembayaran.' }),
+              el('div', { class: 'row row--between row--wrap' },
+                el('span', { class: 'text-sm', text: 'Saldo yang akan masuk' }),
+                el('span', { class: 'mono', text: formatRupiah(pendingGateway.amount) })
+              ),
+              el('div', { class: 'row row--between row--wrap' },
+                el('span', { class: 'text-sm', text: 'Total yang harus dibayar' }),
+                el('span', { class: 'mono', text: formatRupiah(pendingGateway.payment.payAmount) })
+              ),
+              el('a', {
+                class: 'btn btn--outline btn--block',
+                attrs: { href: pendingGateway.payment.checkoutUrl, target: '_blank', rel: 'noopener noreferrer' },
+                text: 'Buka halaman QRIS AstraPay'
+              }),
+              el('p', { class: 'text-xs text-dim', text: 'Saldo hanya dikreditkan setelah signature webhook dan status final AstraPay diverifikasi di server. Muat ulang halaman untuk melihat hasilnya.' })
+            )
+          : Alert({ tone: 'warning', title: 'Invoice sedang dikonfirmasi', children: 'Belum ada tautan pembayaran yang dapat ditampilkan. Jangan transfer ke tujuan lain untuk invoice ini; status akan ditutup otomatis jika tidak berhasil dibuat.' })
+      );
+
+      cards.push(Card({
+        title: 'Deposit otomatis · AstraPay',
+        subtitle: wallet.paymentGateway?.enabled ? 'QRIS dinamis dan payment link' : 'Selesaikan invoice yang masih aktif',
+        children: [gatewayForm, invoices]
+      }));
+    }
+    cards.push(Card({ title: 'Kebijakan refund' },
+      el('p', { class: 'text-sm text-muted', text: wallet.refundPolicy || 'Refund otomatis bila nomor tidak menerima OTP dan supplier menutup order.' })
+    ));
+    policyArea.replaceChildren(...cards);
 
     if (wallet.pendingDepositCount > 0) {
       policyArea.insertBefore(
@@ -181,7 +250,11 @@ export default async function walletPage(ctx) {
           columns: [
             { label: 'Diajukan', render: (d) => el('span', { class: 'text-xs text-dim', text: formatDate(d.createdAt) }) },
             { label: 'Nominal', align: 'right', render: (d) => el('span', { class: 'mono', text: formatRupiah(d.amount) }) },
-            { label: 'Status', render: (d) => Badge({ tone: depositStatusMeta(d.status).tone, children: depositStatusMeta(d.status).label }) },
+            { label: 'Metode', render: (d) => d.method === 'gateway' ? 'AstraPay QRIS' : 'Manual' },
+            { label: 'Status', render: (d) => Badge({ tone: depositStatusMeta(d.status, d.method).tone, children: depositStatusMeta(d.status, d.method).label }) },
+            { label: 'Pembayaran', render: (d) => d.payment?.checkoutUrl
+              ? el('a', { class: 'btn btn--outline btn--sm', attrs: { href: d.payment.checkoutUrl, target: '_blank', rel: 'noopener noreferrer' }, text: `Bayar ${formatRupiah(d.payment.payAmount)}` })
+              : d.method === 'gateway' && d.status === 'pending' ? 'Invoice dikonfirmasi' : '—' },
             { label: 'Catatan admin', render: (d) => el('span', { class: 'text-xs text-dim', text: d.adminNote || '—' }) }
           ],
           rows: data.deposits,

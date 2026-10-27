@@ -118,6 +118,37 @@ export function loadConfig(env = process.env) {
     .filter(Boolean);
   if (!allowedOrigins.includes(appUrl)) allowedOrigins.push(appUrl);
 
+  // AstraPay is a server-to-server integration and stays off until explicitly
+  // enabled with a complete project credential set. Never accept a browser key.
+  const astraPayCredentials = {
+    projectSlug: String(env.ASTRAPAY_PROJECT_SLUG || '').trim(),
+    apiKey: String(env.ASTRAPAY_API_KEY || '').trim(),
+    webhookSecret: String(env.ASTRAPAY_WEBHOOK_SECRET || '').trim()
+  };
+  const astraPayCredentialCount = Object.values(astraPayCredentials).filter(Boolean).length;
+  if (astraPayCredentialCount !== 0 && astraPayCredentialCount !== 3) {
+    throw new ConfigError('AstraPay requires ASTRAPAY_PROJECT_SLUG, ASTRAPAY_API_KEY, and ASTRAPAY_WEBHOOK_SECRET together.');
+  }
+  const astraPayEnabled = bool(env.ASTRAPAY_ENABLED, false);
+  if (astraPayEnabled && astraPayCredentialCount !== 3) {
+    throw new ConfigError('ASTRAPAY_ENABLED=true requires a project slug, API key, and webhook secret.');
+  }
+  if (astraPayCredentials.projectSlug && !/^[a-z0-9][a-z0-9-]{0,79}$/.test(astraPayCredentials.projectSlug)) {
+    throw new ConfigError('ASTRAPAY_PROJECT_SLUG must contain only lowercase letters, numbers, and hyphens.');
+  }
+  if (astraPayEnabled) {
+    let publicAppUrl;
+    try {
+      publicAppUrl = new URL(appUrl);
+    } catch {
+      throw new ConfigError('APP_URL must be a valid public HTTPS URL when AstraPay is enabled.');
+    }
+    if (publicAppUrl.protocol !== 'https:' || publicAppUrl.username || publicAppUrl.password
+        || publicAppUrl.pathname !== '/' || publicAppUrl.search || publicAppUrl.hash) {
+      throw new ConfigError('APP_URL must be a public HTTPS origin (without path or credentials) when AstraPay is enabled.');
+    }
+  }
+
   // Dev-only affordances must never reach production.
   if (isProduction && bool(env.AUTH_EXPOSE_DEV_TOKENS, false)) {
     throw new ConfigError('AUTH_EXPOSE_DEV_TOKENS must never be enabled in production.');
@@ -316,9 +347,18 @@ export function loadConfig(env = process.env) {
     }),
 
     payment: Object.freeze({
-      provider: (env.PAYMENT_PROVIDER || '').trim() || null,
-      mode: (env.PAYMENT_MODE || 'disabled').toLowerCase(),
-      secret: env.PAYMENT_SECRET || ''
+      provider: astraPayEnabled ? 'astrapay' : null,
+      mode: astraPayEnabled ? 'live' : 'disabled',
+      enabled: astraPayEnabled,
+      astraPay: Object.freeze({
+        enabled: astraPayEnabled,
+        projectSlug: astraPayCredentials.projectSlug,
+        apiKey: astraPayCredentials.apiKey,
+        webhookSecret: astraPayCredentials.webhookSecret,
+        expiresIn: int(env.ASTRAPAY_EXPIRES_IN, 600, { min: 300, max: 600 }),
+        timeoutMs: int(env.ASTRAPAY_TIMEOUT_MS, 10000, { min: 2000, max: 30000 }),
+        webhookToleranceSeconds: int(env.ASTRAPAY_WEBHOOK_TOLERANCE_SECONDS, 300, { min: 30, max: 600 })
+      })
     }),
 
     jobs: Object.freeze({
@@ -373,7 +413,7 @@ export function publicConfigView(config) {
     payment: {
       provider: config.payment.provider,
       mode: config.payment.mode,
-      enabled: false
+      enabled: config.payment.enabled
     },
     // Cloudflare Turnstile site key is public by design (it is embedded in the
     // page); the secret never leaves the server.

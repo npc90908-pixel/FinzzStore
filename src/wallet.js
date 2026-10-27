@@ -4,7 +4,7 @@
 // balances itself.
 // ============================================================================
 import { fromDbAmount } from './money.js';
-import { normalizeDepositPolicy } from './deposit-policy.js';
+import { MAXIMUM_GATEWAY_TOPUP_AMOUNT, normalizeDepositPolicy } from './deposit-policy.js';
 
 const TX_LABEL = {
   deposit: 'Deposit',
@@ -13,7 +13,7 @@ const TX_LABEL = {
   adjustment: 'Penyesuaian'
 };
 
-export function createWalletService({ db, settings, orders }) {
+export function createWalletService({ db, settings, orders, payment }) {
   const toTransaction = (row) => ({
     id: row.id,
     type: row.type,
@@ -31,17 +31,42 @@ export function createWalletService({ db, settings, orders }) {
     toTransaction,
 
     async summary(user, { page = 1, perPage = 15 } = {}) {
-      const [wallet, { rows, total }, depositPolicy, refundPolicy, activeOrders, deposits] = await Promise.all([
+      const [wallet, { rows, total }, depositPolicy, refundPolicy, activeOrders, deposits, pendingDeposits] = await Promise.all([
         db.wallets.get(user.id),
         db.transactions.listByUser(user.id, { limit: perPage, offset: (Math.max(1, page) - 1) * perPage }),
         settings.get('deposit_policy'),
         settings.get('refund_policy'),
         db.orders.listActive(user.id),
-        db.deposits.listByUser(user.id, { limit: 5 })
+        db.deposits.listByUser(user.id, { limit: 5 }),
+        db.deposits.listPendingByUser(user.id, { limit: 10 })
       ]);
 
-      const pendingDeposits = deposits.rows.filter((d) => d.status === 'pending');
+      const pendingManualDeposits = pendingDeposits.rows.filter((d) => d.method === 'manual_transfer');
+      const pendingGatewayDeposits = pendingDeposits.rows.filter((d) => d.method === 'gateway');
       const effectiveDepositPolicy = normalizeDepositPolicy(depositPolicy);
+      const toDepositSummary = (d) => ({
+        id: d.id,
+        amount: fromDbAmount(d.amount),
+        approvedAmount: d.approved_amount ? fromDbAmount(d.approved_amount) : null,
+        status: d.status,
+        method: d.method,
+        note: d.user_note,
+        adminNote: d.admin_note,
+        createdAt: d.created_at,
+        reviewedAt: d.reviewed_at,
+        hasProof: Boolean(d.proof_path),
+        payment: d.method === 'gateway' ? {
+          provider: 'astrapay',
+          reference: d.provider_reference,
+          payAmount: d.pay_amount === null || d.pay_amount === undefined ? null : fromDbAmount(d.pay_amount),
+          feeAmount: fromDbAmount(d.fee_amount),
+          checkoutUrl: d.status === 'pending' ? d.checkout_url : null,
+          qris: d.status === 'pending' ? d.qris_payload : null,
+          providerStatus: d.provider_status,
+          expiresAt: d.expires_at,
+          paidAt: d.paid_at
+        } : null
+      });
 
       return {
         balance: fromDbAmount(wallet?.balance ?? 0),
@@ -50,27 +75,23 @@ export function createWalletService({ db, settings, orders }) {
         transactions: rows.map(toTransaction),
         pagination: { page, perPage, total, pages: Math.max(1, Math.ceil(total / perPage)) },
         activeOrders: activeOrders.map((o) => orders.toPublic(o, { includeOtp: true })),
-        deposits: deposits.rows.map((d) => ({
-          id: d.id,
-          amount: fromDbAmount(d.amount),
-          approvedAmount: d.approved_amount ? fromDbAmount(d.approved_amount) : null,
-          status: d.status,
-          note: d.user_note,
-          adminNote: d.admin_note,
-          createdAt: d.created_at,
-          reviewedAt: d.reviewed_at,
-          hasProof: Boolean(d.proof_path)
-        })),
-        pendingDepositCount: pendingDeposits.length,
+        deposits: deposits.rows.map(toDepositSummary),
+        pendingDeposits: pendingDeposits.rows.map(toDepositSummary),
+        pendingDepositCount: pendingManualDeposits.length,
+        pendingGatewayCount: pendingGatewayDeposits.length,
         depositPolicy: {
           minAmount: fromDbAmount(effectiveDepositPolicy.min_amount),
           maxAmount: fromDbAmount(effectiveDepositPolicy.max_amount),
+          gatewayMaxAmount: Math.min(fromDbAmount(effectiveDepositPolicy.max_amount), MAXIMUM_GATEWAY_TOPUP_AMOUNT),
           instructions: effectiveDepositPolicy.instructions,
           bankAccounts: Array.isArray(effectiveDepositPolicy.bank_accounts) ? effectiveDepositPolicy.bank_accounts : [],
           expiryHours: effectiveDepositPolicy.expiry_hours
         },
         refundPolicy: refundPolicy.summary,
-        paymentGateway: { enabled: false, message: 'Pembayaran otomatis belum aktif. Gunakan deposit manual.' }
+        paymentGateway: payment?.status?.() || {
+          enabled: false,
+          message: 'Pembayaran otomatis belum aktif. Gunakan deposit manual.'
+        }
       };
     }
   };

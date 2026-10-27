@@ -9,6 +9,7 @@ import { registerOrderRoutes } from './order-routes.js';
 import { registerWalletRoutes } from './wallet-routes.js';
 import { registerAdminRoutes } from './admin-routes.js';
 import { registerWebhookRoutes } from './webhook-routes.js';
+import { registerPaymentWebhookRoutes } from './payment-webhook-routes.js';
 import { registerCronRoutes } from './cron-routes.js';
 import { registerNotificationRoutes } from './notification-routes.js';
 
@@ -20,6 +21,7 @@ export function registerRoutes({ router, services, config, logger }) {
   registerNotificationRoutes({ router, services });
   registerAdminRoutes({ router, services });
   registerWebhookRoutes({ router, config, logger });
+  registerPaymentWebhookRoutes({ router, services, logger });
   registerCronRoutes({ router, services, config, logger });
   return router;
 }

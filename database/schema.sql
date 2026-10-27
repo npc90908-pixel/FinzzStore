@@ -184,6 +184,15 @@ create table if not exists public.deposits (
   status         public.deposit_status not null default 'pending',
   method         public.payment_method not null default 'manual_transfer',
   unique_code    smallint,
+  provider_reference text,
+  provider_order_id text,
+  checkout_url   text,
+  qris_payload   text,
+  pay_amount     numeric(18,2),
+  fee_amount     numeric(18,2) not null default 0,
+  provider_status text,
+  expires_at     timestamptz,
+  paid_at        timestamptz,
   proof_path     text,
   proof_mime     text,
   proof_size     integer,
@@ -201,10 +210,17 @@ create table if not exists public.deposits (
   constraint deposits_user_note_length check (user_note is null or char_length(user_note) <= 500),
   constraint deposits_admin_note_length check (admin_note is null or char_length(admin_note) <= 500),
   constraint deposits_approved_amount_valid check (approved_amount is null or approved_amount > 0),
-  -- A pending deposit must not carry review metadata; a reviewed one must.
+  constraint deposits_gateway_amounts_valid check (
+    fee_amount >= 0
+    and (pay_amount is null or pay_amount >= amount)
+    and (method <> 'gateway' or provider_reference is not null)
+  ),
+  -- A pending deposit must not carry review metadata; auto-approved gateway
+  -- deposits are allowed without a human reviewer, but always have reviewed_at.
   constraint deposits_review_consistency check (
     (status = 'pending' and reviewed_at is null and reviewed_by is null)
-    or (status in ('approved','rejected') and reviewed_at is not null and reviewed_by is not null)
+    or (status in ('approved','rejected') and reviewed_at is not null
+        and (reviewed_by is not null or (status = 'approved' and method = 'gateway')))
     or (status = 'cancelled')
   )
 );
@@ -212,6 +228,12 @@ create table if not exists public.deposits (
 create index if not exists deposits_user_created_idx on public.deposits (user_id, created_at desc);
 create index if not exists deposits_status_created_idx on public.deposits (status, created_at desc);
 create index if not exists deposits_pending_idx on public.deposits (created_at) where status = 'pending';
+create unique index if not exists deposits_provider_reference_unique
+  on public.deposits (provider_reference) where provider_reference is not null;
+create unique index if not exists deposits_provider_order_unique
+  on public.deposits (provider_order_id) where provider_order_id is not null;
+create index if not exists deposits_gateway_pending_idx
+  on public.deposits (created_at) where method = 'gateway' and status = 'pending';
 
 drop trigger if exists trg_deposits_updated_at on public.deposits;
 create trigger trg_deposits_updated_at
@@ -435,6 +457,21 @@ create table if not exists public.supplier_webhook_events (
 );
 
 create index if not exists webhook_events_received_idx on public.supplier_webhook_events (received_at desc);
+
+-- AstraPay callback/reconciliation dedupe. The raw signature/body is never
+-- stored; only verified event identifiers and non-secret references are kept.
+create table if not exists public.payment_webhook_events (
+  event_id           text primary key,
+  event_type         text not null,
+  provider_order_id  text not null,
+  provider_reference text not null,
+  received_at        timestamptz not null default now(),
+  processed_at       timestamptz,
+  constraint payment_webhook_event_id_format check (event_id ~ '^[a-f0-9]{64}$'),
+  constraint payment_webhook_type_length check (char_length(event_type) between 1 and 80)
+);
+create index if not exists payment_webhook_events_received_idx
+  on public.payment_webhook_events (received_at desc);
 
 -- ----------------------------------------------------------------------------
 -- rate_limits — DB backed sliding counter shared by all PM2 workers

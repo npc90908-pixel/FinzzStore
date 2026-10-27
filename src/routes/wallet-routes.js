@@ -26,6 +26,19 @@ export function registerWalletRoutes({ router }) {
     return ok(result);
   });
 
+  router.post('/api/deposits/gateway', async (ctx) => {
+    const session = await ctx.requireUser();
+    await enforceLimit(ctx, `gateway-deposit:${session.user.id}`, 6, 60 * 60, { critical: true });
+    const body = await ctx.readJson({ limit: 4 * 1024 });
+    const policy = await ctx.services.deposits.policy();
+    const amount = v.money(body.amount, { field: 'amount', min: policy.minAmount, max: policy.gatewayMaxAmount });
+    const result = await ctx.services.deposits.createGateway({ user: session.profile, amount });
+    return created({
+      ...result,
+      message: 'Invoice AstraPay dibuat. Saldo baru dikreditkan setelah status lunas diverifikasi server.'
+    });
+  });
+
   router.post('/api/deposits', async (ctx) => {
     const session = await ctx.requireUser();
     await enforceLimit(ctx, `deposit:${session.user.id}`, 6, 60 * 60, { critical: true });

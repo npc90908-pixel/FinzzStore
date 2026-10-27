@@ -91,6 +91,7 @@ alter table public.admin_audit_logs      enable row level security;
 alter table public.sessions              enable row level security;
 alter table public.idempotency_keys      enable row level security;
 alter table public.supplier_webhook_events enable row level security;
+alter table public.payment_webhook_events enable row level security;
 alter table public.rate_limits           enable row level security;
 alter table public.job_leases            enable row level security;
 alter table public.catalog_sync_runs     enable row level security;
@@ -120,6 +121,7 @@ revoke all on public.admin_audit_logs      from anon, authenticated;
 revoke all on public.sessions              from anon, authenticated;
 revoke all on public.idempotency_keys      from anon, authenticated;
 revoke all on public.supplier_webhook_events from anon, authenticated;
+revoke all on public.payment_webhook_events from anon, authenticated;
 revoke all on public.rate_limits           from anon, authenticated;
 revoke all on public.job_leases            from anon, authenticated;
 revoke all on public.catalog_sync_runs     from anon, authenticated;
@@ -242,8 +244,8 @@ create policy audit_select_admin on public.admin_audit_logs
   using (public.is_admin());
 
 -- Internal tables --------------------------------------------------------
--- sessions, idempotency_keys, supplier_webhook_events, rate_limits,
--- job_leases, catalog_sync_runs: RLS enabled and intentionally NO policies.
+-- sessions, idempotency_keys, supplier_webhook_events, payment_webhook_events,
+-- rate_limits, job_leases, catalog_sync_runs: RLS enabled and intentionally NO policies.
 -- Only the service role (server) can touch them.
 
 comment on table public.sessions is 'Server side sessions. Cookie value is stored as sha256; Supabase refresh token is AES-256-GCM encrypted. Service role only.';

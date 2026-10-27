@@ -25,10 +25,11 @@ const BASE_ENV = {
 export const PNG_1X1 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-export async function startTestApp({ env = {}, supplier = {} } = {}) {
+export async function startTestApp({ env = {}, supplier = {}, paymentOptions = {} } = {}) {
   const app = await createApplication({
     env: { ...BASE_ENV, ...env },
     logger: silentLogger,
+    paymentOptions,
     // Long OTP delay by default: tests force the OTP explicitly so they never
     // depend on wall-clock timing.
     supplierOptions: { otpDelayMs: 60000, cancelDelayMs: 0, ...supplier }

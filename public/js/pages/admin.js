@@ -195,10 +195,10 @@ export default async function adminPage(ctx) {
           d.hasProof
             ? Button({ size: 'sm', variant: 'ghost', iconName: 'eye', title: 'Lihat bukti', onClick: () => window.open(`/api/admin/deposits/${d.id}/proof`, '_blank', 'noopener') })
             : null,
-          d.status === 'pending'
+          d.status === 'pending' && d.method !== 'gateway'
             ? Button({ size: 'sm', variant: 'success', children: 'Setujui', onClick: () => approveDeposit(d) })
             : null,
-          d.status === 'pending'
+          d.status === 'pending' && d.method !== 'gateway'
             ? Button({ size: 'sm', variant: 'danger', children: 'Tolak', onClick: () => rejectDeposit(d) })
             : null
         )
@@ -206,15 +206,19 @@ export default async function adminPage(ctx) {
 
       body.replaceChildren(
         Card({
-          title: 'Deposit manual',
-          subtitle: 'Bukti transfer hanya dapat dibuka oleh admin',
+          title: 'Deposit',
+          subtitle: 'Deposit manual dan invoice AstraPay; gateway dikreditkan otomatis setelah diverifikasi server.',
           actions: filter
         },
           Table({
             columns: [
               { label: 'Diajukan', render: (d) => el('div', {}, el('div', { class: 'text-xs', text: formatDate(d.createdAt) }), el('div', { class: 'text-xs text-dim', text: d.user?.email || '—' })) },
               { label: 'Nominal', align: 'right', render: (d) => el('span', { class: 'mono', text: formatRupiah(d.amount) }) },
-              { label: 'Status', render: (d) => Badge({ tone: depositStatusMeta(d.status).tone, children: depositStatusMeta(d.status).label }) },
+              { label: 'Metode', render: (d) => d.method === 'gateway' ? 'AstraPay QRIS' : 'Transfer manual' },
+              { label: 'Referensi / bayar', render: (d) => d.payment
+                ? el('span', { class: 'mono text-xs', text: `${d.payment.reference || '—'} · ${d.payment.payAmount ? formatRupiah(d.payment.payAmount) : 'invoice dibuat'}` })
+                : '—' },
+              { label: 'Status', render: (d) => Badge({ tone: depositStatusMeta(d.status, d.method).tone, children: depositStatusMeta(d.status, d.method).label }) },
               { label: 'Catatan', render: (d) => el('span', { class: 'text-xs text-dim', text: d.userNote || '—' }) },
               { label: 'Aksi', align: 'right', render: (d) => d.actions }
             ],

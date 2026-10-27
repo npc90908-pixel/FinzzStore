@@ -1,7 +1,7 @@
 # FINZZ Store v2
 
 SaaS platform for buying virtual phone numbers (nokos) with OTP retrieval, a
-prepaid wallet, manual deposits, order management and an admin dashboard.
+prepaid wallet, manual and optional gateway deposits, order management and an admin dashboard.
 
 - **Runtime**: Node.js 24.x LTS, native ES Modules, `node:http` only — no
   Express/Fastify/Nest and no HTTP framework underneath.
@@ -11,8 +11,9 @@ prepaid wallet, manual deposits, order management and an admin dashboard.
   terverifikasi) dengan RLS dan RPC atomik. **Supabase Auth sudah dihapus.**
 - **Auth**: kustom — Argon2id, kode OTP 6 digit lewat SMTP, link reset 32 byte
   sekali pakai (10 menit), sesi cookie HttpOnly + hash di database, CSRF.
-- **Payments**: manual deposit approval only. AstraPay is not wired without a
-  verified status/detail/list and raw-body webhook-signature contract.
+- **Payments**: manual deposit review plus an optional AstraPay QRIS/payment-link
+  flow. AstraPay stays disabled until explicitly configured; signed callbacks
+  are confirmed by a fresh provider lookup before an atomic ledger credit.
 - **Supplier**: TELEKOS.ID server-side adapter (live only when configured) plus
   a mock fixture that is impossible to enable in production.
 
@@ -159,10 +160,11 @@ OAuth bersifat opsional: fitur hidup hanya setelah seluruh pasangan kredensialny
 terisi, dan UI menyembunyikan integrasi yang belum dikonfigurasi.
 
 Lihat `.env.example` untuk variabel penting dan `src/config.js` untuk default
-serta validasi konfigurasi yang berlaku. Belum ada variabel AstraPay khusus.
-`PAYMENT_PROVIDER`, `PAYMENT_MODE`, dan `PAYMENT_SECRET` adalah placeholder
-generik lama di konfigurasi; adapter tetap dikunci `enabled=false` dan nilai
-tersebut tidak mengaktifkan, memanggil, atau memverifikasi AstraPay.
+serta validasi konfigurasi. AstraPay bersifat opsional dan tetap nonaktif sampai
+`ASTRAPAY_ENABLED=true` serta project slug, API key, webhook secret, dan `APP_URL`
+HTTPS publik dikonfigurasi lengkap. API key dan webhook secret hanya digunakan
+server-side. `PAYMENT_PROVIDER`, `PAYMENT_MODE`, dan `PAYMENT_SECRET` lama tidak
+mengaktifkan integrasi ini.
 
 ### 3.4 Process manager and tunnel
 
@@ -244,20 +246,34 @@ idempotency keys and `SECURITY DEFINER` + `search_path` hardening. The ledger
 `src/money.js` is integer-only — no floating-point money math anywhere.
 
 ### Deposits
-Manual only; the minimum top-up is Rp1.000 and is enforced by the API and the
-PostgreSQL RPC, not only by the form. A manual approval credits the requested
+Manual transfer and optional AstraPay QRIS/payment-link deposits share the
+wallet ledger. The minimum top-up is Rp1.000 and is enforced by the API and the
+PostgreSQL RPC, not only by the form. Manual approval credits the requested
 amount by default; an explicit admin adjustment is stored separately in
 `approved_amount`. Proof uploads are validated by magic bytes, size-limited, renamed
 with a UUID and written outside the web root (`UPLOAD_DIR`, mode 0600). Only an
-admin can read a proof (`/api/admin/deposits/:id/proof`). Approval credits the
-wallet exactly once (`409 DEPOSIT_ALREADY_REVIEWED` afterwards), rejection needs
-a reason, and both are audited. The existing schema is a manual-review flow:
-`deposits.amount` is the requested amount, `approved_amount` is the amount actually
-credited (bounded by the request), and `unique_code` is currently unused by the
-manual-create RPC. `wallet_transactions` records the credit under a unique
-deposit reference. There is no provider invoice ID, payable amount, gateway fee,
-payment URL/QR payload, provider status/event inbox, or provider reconciliation
-state; the generic `method='gateway'` enum value is not an AstraPay integration.
+admin can read a manual proof (`/api/admin/deposits/:id/proof`).
+
+AstraPay is disabled by default. When enabled, the server creates a merchant
+reference and invoice, retains its checkout URL/QR payload and expiry, then
+accepts only `order.paid` callbacks with a fresh `x-pg2-timestamp` and
+`x-pg2-signature` HMAC. Before crediting, it fetches the order again through the
+server-only API key and matches the project reference, order ID, base/credit
+amount, payable amount, fee, and expiry. A single database RPC locks the deposit
+and wallet, records the webhook/reconciliation event, writes one ledger credit
+for `base_amount` (never the unique-code `pay_amount`), and marks the deposit
+approved atomically. The documented QRIS/service fee must be zero; a nonzero or
+mismatched fee/amount fails closed. Redirects and browser-reported status never
+credit the wallet. A server-side reconciliation job also checks pending invoices.
+Turning off `ASTRAPAY_ENABLED` stops new invoices but keeps signed callbacks and
+status lookups available while complete credentials remain configured; keep the
+secrets until all pending invoices settle or expire.
+
+Manual approval credits once (`409 DEPOSIT_ALREADY_REVIEWED` afterwards),
+rejection needs a reason, and both are audited. Gateway deposits cannot be
+manually approved/rejected. `database/migrations/011_astrapay_gateway.sql` adds
+provider invoice fields, a private webhook inbox, and the restricted payment
+RPCs. Apply migrations before enabling AstraPay.
 
 ### Admin
 Dashboard (real totals from completed orders, wallet liability, pending
@@ -321,6 +337,8 @@ GET    /api/wallet            ?page
 GET    /api/wallet/policy
 GET    /api/deposits
 POST   /api/deposits          { amount, proof(base64), note? }
+POST   /api/deposits/gateway  { amount } (server creates an AstraPay invoice when enabled)
+POST   /api/webhooks/astrapay (public callback; HMAC + provider GET required)
 GET    /api/profile
 PATCH  /api/profile
 
@@ -457,15 +475,13 @@ runtime evidence and the deployment checklist.
   webhook signature verification, but it has only been tested against the mock
   fixture and the published API contract. Before selling, run a small real
   purchase with an owner-approved account and confirm the amounts.
-- **AstraPay gateway not implemented.** Deposits remain manual; there is no
-  AstraPay invoice, QRIS/payment-link flow, automatic-payment history, or
-  reconciliation UI. The repository contains no usable AstraPay contract for
-  exact status/detail/list paths, response schemas, webhook signature
-  header/encoding/canonical input, payable-amount/fee semantics, or replay
-  behavior. These must be confirmed before adding invoice fields or any
-  provider-driven wallet-credit path. No AstraPay-specific credentials or
-  endpoints are wired. Generic `PAYMENT_*` config placeholders do not activate
-  the adapter, which remains hard-disabled.
+- **AstraPay has not been live-verified.** The adapter and payment flow are
+  implemented from the supplied integration guide, but the gateway remains
+  disabled by default and no live invoice, callback, or reconciliation has been
+  exercised in this sandbox. Apply migration `011_astrapay_gateway.sql`, rotate
+  any exposed key, then configure the replacement API key and webhook secret
+  through the deployment secret store before explicitly enabling it. Never
+  commit credentials or trust a browser redirect/status as payment proof.
 - **Catalogue mirror freshness.** The home-page summary uses the PostgreSQL
   mirror, refreshed by the catalogue job every 30 minutes, so its counts and
   prices can lag a supplier change; the UI identifies the mirror and last sync

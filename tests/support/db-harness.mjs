@@ -63,7 +63,7 @@ export async function resetData(client) {
       public.order_events, public.orders, public.wallet_transactions, public.deposits,
       public.wallets, public.profiles, public.idempotency_keys, public.sessions,
       public.rate_limits, public.job_leases, public.supplier_webhook_events,
-      public.admin_audit_logs, public.services, public.catalog_sync_runs
+      public.payment_webhook_events, public.admin_audit_logs, public.services, public.catalog_sync_runs
     restart identity cascade;
     delete from auth.users;
   `);
