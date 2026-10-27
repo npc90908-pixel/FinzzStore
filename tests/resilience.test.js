@@ -13,12 +13,14 @@
 // ============================================================================
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { startTestApp } from './support/app-harness.mjs';
 import { createApplication } from '../src/bootstrap.js';
+import { invokeExpressApp } from '../src/express-app.js';
 import { createRateLimiter } from '../src/security.js';
 import { createLogger } from '../src/logging.js';
 import { scrubSecrets, fromDbError } from '../src/errors.js';
@@ -380,6 +382,26 @@ test('register still rejects an existing address with 409 EMAIL_TAKEN, not a 500
 });
 
 // ============================================ diagnostics / secret hygiene ===
+test('Express dispatch waits for the response to finish before resolving', async () => {
+  const response = new EventEmitter();
+  response.writableFinished = false;
+  let finishResponse;
+  let settled = false;
+  const pending = invokeExpressApp((_req, res) => {
+    finishResponse = () => {
+      res.writableFinished = true;
+      res.emit('finish');
+    };
+  }, {}, response).then(() => { settled = true; });
+
+  await Promise.resolve();
+  assert.equal(settled, false, 'the Vercel handler must remain pending while Express is writing');
+  finishResponse();
+  await pending;
+  assert.equal(settled, true);
+  assert.equal(response.listenerCount('finish'), 0, 'response listeners are cleaned up');
+});
+
 test('Vercel application cold start does not synchronously probe PostgreSQL', async () => {
   const storageDir = await mkdtemp(path.join(os.tmpdir(), 'finzz-vercel-'));
   let app;

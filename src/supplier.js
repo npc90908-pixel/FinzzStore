@@ -130,10 +130,13 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
           body: body === undefined ? undefined : JSON.stringify(body),
           signal: controller.signal
         });
-        clearTimeout(timer);
         readRateLimit(response.headers);
 
+        // Keep the timeout active until the response body has been consumed.
+        // Clearing it immediately after fetch() leaves a stalled body read able
+        // to pin a Vercel invocation indefinitely.
         const text = await readResponseText(response);
+        clearTimeout(timer);
         let payload = null;
         if (text) {
           try {
@@ -144,12 +147,14 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
         }
 
         if (response.ok) {
-          state.lastSuccessAt = new Date().toISOString();
-          state.lastError = null;
-          if (!payload || typeof payload !== 'object') {
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            state.failures += 1;
+            state.lastError = { code: 'INVALID_RESPONSE', at: new Date().toISOString() };
             throw new SupplierError('INVALID_RESPONSE', 'Respons supplier tidak valid', { definitive: false });
           }
-          // Evidence, not a promise: remember which capability actually worked.
+          state.lastSuccessAt = new Date().toISOString();
+          state.lastError = null;
+          // Evidence, not a promise: remember only valid JSON object responses.
           if (mode === 'live') state.verified.add(VERIFIED_KEY[path] || path);
           return payload;
         }
@@ -225,6 +230,13 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
             sender: o.sender ? String(o.sender).slice(0, 80) : null,
             receivedAt: o.received_at || null
           }))
+          // TeleKos documents that the newest OTP should be used when several
+          // messages exist. Do not depend on provider array ordering.
+          .sort((a, b) => {
+            const at = a.receivedAt ? Date.parse(a.receivedAt) : 0;
+            const bt = b.receivedAt ? Date.parse(b.receivedAt) : 0;
+            return (Number.isFinite(bt) ? bt : 0) - (Number.isFinite(at) ? at : 0);
+          })
       : [];
     return {
       id: String(raw.id),

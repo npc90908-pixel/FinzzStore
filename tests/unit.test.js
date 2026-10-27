@@ -287,6 +287,17 @@ test('TeleKos adapter uses only documented dynamic reads and preserves provider 
   });
   assert.deepEqual(await retrying.getServers(), []);
   assert.equal(retryCount, 2, 'a transient read receives one bounded retry');
+
+  const newestOtp = createSupplierClient(config, {
+    fetchImpl: async () => new Response(JSON.stringify({ data: {
+      id: 'TRX-OTP', status: 'received', otps: [
+        { id: 'old', code: '111111', received_at: '2026-10-27T10:00:00.000Z' },
+        { id: 'new', code: '222222', received_at: '2026-10-27T10:01:00.000Z' }
+      ]
+    } }), { status: 200, headers: { 'content-type': 'application/json' } })
+  });
+  const order = await newestOtp.getOrder('TRX-OTP');
+  assert.equal(order.otps[0].code, '222222', 'latest OTP is always first regardless of provider array order');
 });
 
 test('dynamic catalogue cache sorts sale prices and labels failed refresh data stale', async () => {
@@ -661,9 +672,9 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
         status: isCreate ? 'pending' : 'paid',
         base_amount: 1000,
         credit_amount: 1000,
-        fee_qris: 0,
-        service_fee: 0,
-        pay_amount: 1001,
+        fee_qris: 5,
+        service_fee: 2,
+        pay_amount: 1007,
         checkout_url: 'https://gateway.astrapay.biz.id/pay/order-1',
         qris: '000201-test-payload',
         expires_at: expiresAt,
@@ -678,17 +689,21 @@ test('AstraPay adapter validates invoice details and verifies raw-body timestamp
     redirectUrl: 'https://finzz.test/wallet'
   });
   assert.equal(invoice.providerOrderId, 'order-1');
-  assert.equal(invoice.payAmount, 1001);
-  assert.equal(invoice.feeAmount, 0);
+  assert.equal(invoice.payAmount, 1007);
+  assert.equal(invoice.feeAmount, 7);
+  assert.equal(invoice.feeQris, 5);
+  assert.equal(invoice.serviceFee, 2);
   assert.equal(calls[0].options.headers['x-api-key'], 'unit-test-api-key-not-real');
   assert.equal(calls[0].options.body.includes('1000'), true);
 
   const remote = await adapter.checkStatus('order-1');
   const paid = adapter.validatePaidOrder(remote, {
     providerOrderId: 'order-1', reference: 'FZ-UNIT-REF', amount: 1000,
-    payAmount: 1001, expiresAt
+    payAmount: 1007, expiresAt
   });
-  assert.equal(paid.payAmount, 1001);
+  assert.equal(paid.payAmount, 1007);
+  assert.equal(paid.feeAmount, 7);
+  assert.equal(paid.creditAmount, 1000);
   assert.equal(calls[1].options.method, 'GET');
 
   const rawBody = Buffer.from('{"event":"order.paid","reference":"FZ-UNIT-REF"}');

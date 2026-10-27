@@ -797,9 +797,9 @@ test('AstraPay deposits require a signed callback plus fresh provider verificati
       status: creating ? 'pending' : 'paid',
       base_amount: 1000,
       credit_amount: 1000,
-      fee_qris: 0,
-      service_fee: 0,
-      pay_amount: 1001,
+      fee_qris: 5,
+      service_fee: 2,
+      pay_amount: 1008,
       checkout_url: 'https://gateway.astrapay.biz.id/pay/astrapay-order-1',
       qris: '000201-test-qris-payload',
       expires_at: expiresAt,
@@ -832,8 +832,8 @@ test('AstraPay deposits require a signed callback plus fresh provider verificati
     assert.equal(created.json.deposit.method, 'gateway');
     assert.equal(created.json.deposit.status, 'pending');
     assert.equal(created.json.payment.baseAmount, 1000);
-    assert.equal(created.json.payment.payAmount, 1001);
-    assert.equal(created.json.payment.feeAmount, 0);
+    assert.equal(created.json.payment.payAmount, 1008);
+    assert.equal(created.json.payment.feeAmount, 7);
     assert.match(created.json.payment.checkoutUrl, /^https:\/\/gateway\.astrapay\.biz\.id\/pay\//);
     assert.equal(await walletBalance(client), 0, 'invoice creation does not credit funds');
     assert.ok(requests[0].options.headers['x-api-key']);
@@ -852,8 +852,8 @@ test('AstraPay deposits require a signed callback plus fresh provider verificati
         reference: created.json.deposit.payment.reference,
         status: 'paid',
         base_amount: 1000,
-        fee_qris: 0,
-        pay_amount: 1001
+        fee_qris: 5,
+        pay_amount: 1008
       }
     });
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -888,7 +888,8 @@ test('AstraPay deposits require a signed callback plus fresh provider verificati
     const ledger = gateway.db.store.transactions.filter((tx) => tx.reference_type === 'deposit' && tx.reference_id === created.json.deposit.id);
     assert.equal(ledger.length, 1);
     assert.equal(ledger[0].amount, 1000);
-    assert.equal(ledger[0].metadata.pay_amount, 1001);
+    assert.equal(ledger[0].metadata.pay_amount, 1008);
+    assert.equal(ledger[0].metadata.fee_amount, 7);
 
     const replay = await client.post('/api/webhooks/astrapay', rawBody, {
       headers: { 'x-pg2-timestamp': timestamp, 'x-pg2-signature': `v1=${signature}` }

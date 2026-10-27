@@ -140,8 +140,8 @@ export function createPaymentAdapter(config, { logger, fetchImpl = globalThis.fe
     const serviceFee = data.service_fee === undefined ? 0 : positiveInteger(data.service_fee, 'service_fee');
     const creditAmount = positiveInteger(data.credit_amount, 'credit_amount');
     const payAmount = positiveInteger(data.pay_amount, 'pay_amount');
-    if (baseAmount !== amount || creditAmount !== amount || feeQris !== 0 || serviceFee !== 0 || payAmount < amount) {
-      throw new AppError('PAYMENT_PROVIDER_CONTRACT_INVALID', 'Nominal atau biaya AstraPay tidak sesuai kebijakan deposit.', 502);
+    if (baseAmount !== amount || creditAmount !== amount || payAmount < baseAmount + feeQris + serviceFee) {
+      throw new AppError('PAYMENT_PROVIDER_CONTRACT_INVALID', 'Nominal atau rincian biaya AstraPay tidak konsisten.', 502);
     }
     const orderId = String(data.id || '');
     if (!orderId || orderId.length > 120 || /[\u0000-\u001f\u007f]/.test(orderId)) {
@@ -163,6 +163,8 @@ export function createPaymentAdapter(config, { logger, fetchImpl = globalThis.fe
       reference,
       baseAmount,
       feeAmount: feeQris + serviceFee,
+      feeQris,
+      serviceFee,
       payAmount,
       creditAmount,
       qris,
@@ -189,8 +191,8 @@ export function createPaymentAdapter(config, { logger, fetchImpl = globalThis.fe
     if (orderId !== expected.providerOrderId || reference !== expected.reference || status !== 'paid') {
       throw new AppError('PAYMENT_ORDER_NOT_PAID', 'Status pembayaran AstraPay belum dapat diverifikasi.', 409);
     }
-    if (baseAmount !== expected.amount || creditAmount !== expected.amount || feeQris !== 0 || serviceFee !== 0 || payAmount < baseAmount) {
-      throw new AppError('PAYMENT_AMOUNT_MISMATCH', 'Nominal pembayaran AstraPay tidak sesuai deposit.', 409);
+    if (baseAmount !== expected.amount || creditAmount !== expected.amount || payAmount < baseAmount + feeQris + serviceFee) {
+      throw new AppError('PAYMENT_AMOUNT_MISMATCH', 'Nominal atau rincian biaya AstraPay tidak sesuai deposit.', 409);
     }
     if (expected.payAmount !== null && expected.payAmount !== undefined && payAmount !== expected.payAmount) {
       throw new AppError('PAYMENT_AMOUNT_MISMATCH', 'Nominal bayar AstraPay berbeda dari invoice yang dibuat.', 409);
@@ -203,6 +205,9 @@ export function createPaymentAdapter(config, { logger, fetchImpl = globalThis.fe
       reference,
       baseAmount,
       feeAmount: feeQris + serviceFee,
+      feeQris,
+      serviceFee,
+      creditAmount,
       payAmount,
       paidAt,
       expiresAt,

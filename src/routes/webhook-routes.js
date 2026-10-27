@@ -65,7 +65,10 @@ export function registerWebhookRoutes({ router, config, logger }) {
         if (!order) {
           logger.warn('webhook for unknown order', { deliveryId, supplierOrderId: remote?.id });
           await ctx.db.webhooks.markProcessed(deliveryId, 'ORDER_NOT_FOUND');
-          return ok({ received: true, matched: false });
+          // The order row may not have committed yet when the provider webhook
+          // races the checkout transaction. Return non-2xx so TeleKos retries;
+          // record() can reclaim this failed delivery on that retry.
+          throw new AppError('WEBHOOK_ORDER_PENDING', 'Order belum tersinkronisasi; webhook perlu dicoba ulang.', 503);
         }
 
         const mapped = mapSupplierStatus(remote.status);
@@ -86,9 +89,12 @@ export function registerWebhookRoutes({ router, config, logger }) {
         logger.info('webhook processed', { deliveryId, type: payload.type, orderId: order.id });
         return ok({ received: true, matched: true });
       } catch (err) {
+        // Keep failed deliveries retryable. markProcessed(error) stores the
+        // diagnostic without setting processed_at; record() may reclaim that
+        // failed delivery on a later signed retry. Marking it processed here
+        // would make every provider retry a no-op and permanently lose the OTP.
         await ctx.db.webhooks.markProcessed(deliveryId, String(err.message).slice(0, 300)).catch(() => {});
         logger.error('webhook processing failed', { deliveryId, error: err.message });
-        // 500 asks the supplier to retry; the delivery id keeps it idempotent.
         throw new AppError('WEBHOOK_PROCESSING_FAILED', 'Webhook gagal diproses.', 500);
       }
     },

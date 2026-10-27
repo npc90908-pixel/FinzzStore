@@ -802,3 +802,26 @@ html[data-theme="light"] .brand-chip__logo[src$="/x.svg"] { filter: none; }
     display: none;
   }
 }
+
+/* AstraPay QRIS card: locally generated QR image, never sent to a third-party renderer. */
+.qris-payment { gap: 14px; }
+.qris-payment__panel {
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  border: 1px solid var(--border, rgba(148,163,198,.22));
+  border-radius: 18px;
+  background: #fff;
+  color: #111827;
+}
+.qris-payment__image {
+  display: block;
+  width: min(280px, 100%);
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+  image-rendering: pixelated;
+  background: #fff;
+  border-radius: 8px;
+}
+.qris-payment__panel .text-dim { color: #4b5563; overflow-wrap: anywhere; text-align: center; }

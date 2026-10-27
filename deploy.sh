@@ -42,8 +42,8 @@ banner() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
 banner "1/6 — preflight env Vercel"
 run_vercel link --yes --project "$PROJECT" --scope "$SCOPE" >/dev/null
 
-REQUIRED=(DATABASE_URL APP_ENCRYPTION_KEY APP_URL CRON_SECRET TELEKOS_API_KEY TELEKOS_WEBHOOK_SECRET)
-RECOMMENDED=(SMTP_HOST SMTP_PORT SMTP_FROM)
+REQUIRED=(DATABASE_URL APP_ENCRYPTION_KEY APP_URL CRON_SECRET TELEKOS_API_KEY)
+RECOMMENDED=(TELEKOS_WEBHOOK_SECRET SMTP_HOST SMTP_PORT SMTP_FROM ASTRAPAY_ENABLED ASTRAPAY_PROJECT_SLUG ASTRAPAY_API_KEY ASTRAPAY_WEBHOOK_SECRET)
 OBSOLETE=(SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_JWT_SECRET SUPABASE_DB_URL)
 
 ENV_DUMP="$(run_vercel env ls "$TARGET" 2>/dev/null || true)"
@@ -59,7 +59,7 @@ for name in "${REQUIRED[@]}"; do
 done
 for name in "${RECOMMENDED[@]}"; do
   if printf '%s' "$ENV_DUMP" | grep -qE "(^|[[:space:]])${name}([[:space:]]|$)"; then echo "  ✔ ${name}"
-  else echo "  ! ${name} belum diset — OTP email tidak akan terkirim"; fi
+  else echo "  ! ${name} belum diset (opsional; fitur terkait bisa nonaktif)"; fi
 done
 for name in "${OBSOLETE[@]}"; do
   if printf '%s' "$ENV_DUMP" | grep -qE "(^|[[:space:]])${name}([[:space:]]|$)"; then

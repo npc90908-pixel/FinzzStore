@@ -12,6 +12,7 @@ import { AppError, errors } from './errors.js';
 import { decodeUpload } from './validation.js';
 import { fromDbAmount } from './money.js';
 import { MAXIMUM_GATEWAY_TOPUP_AMOUNT, normalizeDepositPolicy } from './deposit-policy.js';
+import QRCode from 'qrcode';
 
 export function createDepositService({ db, settings, config, payment, logger }) {
   const storageRoot = path.resolve(config.storageDir);
@@ -21,7 +22,7 @@ export function createDepositService({ db, settings, config, payment, logger }) 
     await mkdir(depositDir, { recursive: true, mode: 0o700 });
   }
 
-  const toPublic = (row) => ({
+  const toPublic = async (row, { includeQrImage = true } = {}) => ({
     id: row.id,
     amount: fromDbAmount(row.amount),
     approvedAmount: row.approved_amount ? fromDbAmount(row.approved_amount) : null,
@@ -40,6 +41,12 @@ export function createDepositService({ db, settings, config, payment, logger }) 
       feeAmount: fromDbAmount(row.fee_amount),
       checkoutUrl: row.status === 'pending' ? row.checkout_url : null,
       qris: row.status === 'pending' ? row.qris_payload : null,
+      qrisImage: includeQrImage && row.status === 'pending' && row.qris_payload
+        ? await QRCode.toDataURL(row.qris_payload, { errorCorrectionLevel: 'M', margin: 2, width: 280 }).catch((error) => {
+            logger.warn('QRIS payload could not be rendered locally', { depositId: row.id, code: error?.name || 'QR_RENDER_ERROR' });
+            return null;
+          })
+        : null,
       providerStatus: row.provider_status,
       expiresAt: row.expires_at,
       paidAt: row.paid_at
@@ -101,7 +108,7 @@ export function createDepositService({ db, settings, config, payment, logger }) 
         });
         logger.info('AstraPay invoice created', { depositId: intent.deposit.id, reference, amount });
         return {
-          deposit: toPublic(saved.deposit),
+          deposit: await toPublic(saved.deposit),
           payment: {
             provider: 'astrapay',
             checkoutUrl: invoice.checkoutUrl,
@@ -198,7 +205,7 @@ export function createDepositService({ db, settings, config, payment, logger }) 
           maxPending: 3
         });
         logger.info('deposit created', { depositId: result.deposit.id, userId: user.id, amount });
-        return { deposit: toPublic(result.deposit), policy };
+        return { deposit: await toPublic(result.deposit), policy };
       } catch (err) {
         // Never leave an orphan file behind when the row is rejected.
         await writeFile(absolute, '').catch(() => {});
@@ -212,7 +219,7 @@ export function createDepositService({ db, settings, config, payment, logger }) 
         offset: (Math.max(1, page) - 1) * perPage
       });
       return {
-        deposits: rows.map(toPublic),
+        deposits: await Promise.all(rows.map((row) => toPublic(row))),
         pagination: { page, perPage, total, pages: Math.max(1, Math.ceil(total / perPage)) }
       };
     },
@@ -226,7 +233,7 @@ export function createDepositService({ db, settings, config, payment, logger }) 
       const enriched = [];
       for (const row of rows) {
         const profile = await db.profiles.get(row.user_id);
-        enriched.push({ ...toPublic(row), user: profile ? { id: profile.id, email: profile.email, username: profile.username } : null });
+        enriched.push({ ...await toPublic(row, { includeQrImage: false }), user: profile ? { id: profile.id, email: profile.email, username: profile.username } : null });
       }
       return {
         deposits: enriched,
@@ -237,13 +244,13 @@ export function createDepositService({ db, settings, config, payment, logger }) 
     async approve({ depositId, adminId, amount = null, note = null, ip, userAgent }) {
       const result = await db.deposits.approve(depositId, adminId, amount, note, { ip, userAgent });
       logger.info('deposit approved', { depositId, adminId, amount: result.deposit.approved_amount });
-      return { deposit: toPublic(result.deposit), balance: fromDbAmount(result.balance) };
+      return { deposit: await toPublic(result.deposit), balance: fromDbAmount(result.balance) };
     },
 
     async reject({ depositId, adminId, reason, ip, userAgent }) {
       const result = await db.deposits.reject(depositId, adminId, reason, { ip, userAgent });
       logger.info('deposit rejected', { depositId, adminId });
-      return { deposit: toPublic(result.deposit) };
+      return { deposit: await toPublic(result.deposit) };
     },
 
     /** Admin-only proof download. Rejects any path escaping the deposit dir. */
