@@ -4,6 +4,7 @@
 // balances itself.
 // ============================================================================
 import { fromDbAmount } from './money.js';
+import { normalizeDepositPolicy } from './deposit-policy.js';
 
 const TX_LABEL = {
   deposit: 'Deposit',
@@ -40,6 +41,7 @@ export function createWalletService({ db, settings, orders }) {
       ]);
 
       const pendingDeposits = deposits.rows.filter((d) => d.status === 'pending');
+      const effectiveDepositPolicy = normalizeDepositPolicy(depositPolicy);
 
       return {
         balance: fromDbAmount(wallet?.balance ?? 0),
@@ -61,11 +63,11 @@ export function createWalletService({ db, settings, orders }) {
         })),
         pendingDepositCount: pendingDeposits.length,
         depositPolicy: {
-          minAmount: fromDbAmount(depositPolicy.min_amount),
-          maxAmount: fromDbAmount(depositPolicy.max_amount),
-          instructions: depositPolicy.instructions,
-          bankAccounts: Array.isArray(depositPolicy.bank_accounts) ? depositPolicy.bank_accounts : [],
-          expiryHours: depositPolicy.expiry_hours
+          minAmount: fromDbAmount(effectiveDepositPolicy.min_amount),
+          maxAmount: fromDbAmount(effectiveDepositPolicy.max_amount),
+          instructions: effectiveDepositPolicy.instructions,
+          bankAccounts: Array.isArray(effectiveDepositPolicy.bank_accounts) ? effectiveDepositPolicy.bank_accounts : [],
+          expiryHours: effectiveDepositPolicy.expiry_hours
         },
         refundPolicy: refundPolicy.summary,
         paymentGateway: { enabled: false, message: 'Pembayaran otomatis belum aktif. Gunakan deposit manual.' }

@@ -35,6 +35,35 @@ const VERIFIED_KEY = {
   '/orders': 'orders'
 };
 const READ_CAPABILITIES = ['servers', 'apps', 'countries', 'prices'];
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+async function readResponseText(response) {
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel().catch(() => {});
+    throw new SupplierError('INVALID_RESPONSE', 'Respons supplier melebihi batas ukuran', { definitive: false });
+  }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const bytes = Buffer.from(value);
+      total += bytes.length;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new SupplierError('INVALID_RESPONSE', 'Respons supplier melebihi batas ukuran', { definitive: false });
+      }
+      chunks.push(bytes);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
+}
 
 export function createSupplierClient(config, { logger, fetchImpl = globalThis.fetch } = {}) {
   const { baseUrl, apiKey, timeoutMs, mode, enabled } = config.supplier;
@@ -75,7 +104,9 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
 
   async function request(path, { method = 'GET', query, body, idempotencyKey, retries } = {}) {
     if (!enabled) throw new SupplierError('SUPPLIER_NOT_CONFIGURED', 'Supplier belum dikonfigurasi', { definitive: false });
-    const maxRetries = retries ?? (method === 'GET' ? 2 : 1);
+    // Reads are retried at most once. Public catalogue endpoints also have a
+    // process cache + distributed lease; provider retries must remain bounded.
+    const maxRetries = retries ?? 1;
     const url = buildUrl(path, query);
     let attempt = 0;
 
@@ -102,7 +133,7 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
         clearTimeout(timer);
         readRateLimit(response.headers);
 
-        const text = await response.text();
+        const text = await readResponseText(response);
         let payload = null;
         if (text) {
           try {
@@ -129,7 +160,7 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
 
         if (response.status === 429) {
           if (attempt <= maxRetries) {
-            const waitMs = Math.min(30000, (retryAfter || 5) * 1000) + Math.random() * 500;
+            const waitMs = Math.min(5000, (retryAfter || 2) * 1000) + Math.random() * 250;
             logger?.warn?.('supplier rate limited', { retryAfter, attempt });
             await sleep(waitMs);
             continue;
@@ -223,6 +254,7 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
     mode,
     isConfigured: Boolean(enabled),
     isMock: mode === 'mock',
+    quotesEnabled: Boolean(enabled),
 
     async getBalance() {
       const res = await request('/balance');
@@ -234,46 +266,50 @@ export function createSupplierClient(config, { logger, fetchImpl = globalThis.fe
 
     async getServers() {
       const res = await request('/servers');
-      return ensureArray(res.data, 'daftar server').map((s) => ({
-        id: String(s.id),
-        name: String(s.name || s.id),
-        available: Boolean(s.available),
-        maintenance: Boolean(s.maintenance)
-      }));
+      return ensureArray(res.data, 'daftar server')
+        .filter((s) => s && typeof s === 'object' && String(s.id ?? '').trim())
+        .map((s) => ({
+          id: String(s.id),
+          name: String(s.name || s.id),
+          available: Boolean(s.available),
+          maintenance: Boolean(s.maintenance)
+        }));
     },
 
     async getApps(server) {
       const res = await request('/apps', { query: { server } });
-      return ensureArray(res.data, 'daftar aplikasi').map((a) => ({
-        id: String(a.id),
-        name: String(a.name || a.id)
-      }));
+      return ensureArray(res.data, 'daftar aplikasi')
+        .filter((a) => a && typeof a === 'object' && String(a.id ?? '').trim())
+        .map((a) => ({ id: String(a.id), name: String(a.name || a.id) }));
     },
 
     async getCountries({ server, app }) {
       const res = await request('/countries', { query: { server, app } });
-      return ensureArray(res.data, 'daftar negara').map((c) => ({
-        id: Number(c.id),
-        name: String(c.name || ''),
-        iso: c.iso || null,
-        callingCode: c.calling_code || null,
-        stock: Number(c.stock) || 0
-      }));
+      return ensureArray(res.data, 'daftar negara')
+        .filter((c) => c && typeof c === 'object' && Number.isSafeInteger(Number(c.id)) && Number(c.id) > 0)
+        .map((c) => ({
+          id: Number(c.id),
+          name: String(c.name || c.id),
+          iso: c.iso === undefined || c.iso === null ? null : String(c.iso),
+          callingCode: c.calling_code === undefined || c.calling_code === null ? null : String(c.calling_code),
+          stock: Number.isSafeInteger(Number(c.stock)) && Number(c.stock) >= 0 ? Number(c.stock) : 0
+        }));
     },
 
     async getPrices({ server, app, country, refresh = false }) {
       const res = await request('/prices', { query: { server, app, country, refresh: refresh ? 1 : undefined } });
       const offers = ensureArray(res.data, 'daftar harga')
+        .filter((o) => o && typeof o === 'object')
         .map((o) => ({
-          id: String(o.id || ''),
-          offerId: String(o.offer_id || ''),
+          id: o.id === undefined || o.id === null ? '' : String(o.id),
+          offerId: o.offer_id === undefined || o.offer_id === null ? '' : String(o.offer_id),
           price: Number(o.price),
-          currency: o.currency || 'IDR',
-          stock: Number(o.stock) || 0
+          currency: o.currency ? String(o.currency) : 'IDR',
+          stock: Number.isSafeInteger(Number(o.stock)) && Number(o.stock) >= 0 ? Number(o.stock) : 0
         }))
-        .filter((o) => o.offerId && Number.isFinite(o.price) && o.price > 0)
-        .sort((a, b) => a.price - b.price);
-      return { offers, quotedAt: res.meta?.quoted_at || new Date().toISOString(), server: res.meta?.server || null };
+        .filter((o) => o.id && o.offerId && Number.isFinite(o.price) && o.price > 0)
+        .sort((a, b) => a.price - b.price || a.offerId.localeCompare(b.offerId));
+      return { offers, quotedAt: res.meta?.quoted_at || null, server: res.meta?.server || null };
     },
 
     async createOrder({ offerId, idempotencyKey }) {

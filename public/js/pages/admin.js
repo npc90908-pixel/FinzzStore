@@ -712,7 +712,7 @@ export default async function adminPage(ctx) {
       const depositSave = Button({ variant: 'primary', children: 'Simpan kebijakan deposit' });
       depositForm.append(
         el('div', { class: 'form-grid form-grid--2' },
-          Input({ label: 'Minimum deposit', name: 'min_amount', type: 'number', value: String(settings.deposit_policy.min_amount) }),
+          Input({ label: 'Minimum deposit (min. Rp1.000)', name: 'min_amount', type: 'number', min: 1000, value: String(settings.deposit_policy.min_amount) }),
           Input({ label: 'Maksimum deposit', name: 'max_amount', type: 'number', value: String(settings.deposit_policy.max_amount) }),
           Input({ label: 'Kedaluwarsa (jam)', name: 'expiry_hours', type: 'number', value: String(settings.deposit_policy.expiry_hours) })
         ),

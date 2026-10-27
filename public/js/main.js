@@ -56,7 +56,7 @@ const ROUTE_MAP = {
   '/privacy': 'privacy'
 };
 
-const PRIVATE_ROUTES = new Set(['dashboard', 'services', 'orders', 'wallet', 'profile', 'admin', 'notifications']);
+const PRIVATE_ROUTES = new Set(['dashboard', 'orders', 'wallet', 'profile', 'admin', 'notifications']);
 
 function readBootState() {
   const node = document.getElementById('finzz-state');

@@ -530,7 +530,7 @@ create index if not exists catalog_sync_started_idx on public.catalog_sync_runs 
 insert into public.app_settings (key, value, description, is_public)
 values
   ('store_profile', '{"name":"FINZZ Store","tagline":"Nomor virtual instan untuk verifikasi akun","support_email":"support@finzz.store","support_whatsapp":"","support_telegram":""}'::jsonb, 'Public store identity and support channels', true),
-  ('deposit_policy', '{"min_amount":10000,"max_amount":5000000,"instructions":"Transfer ke rekening resmi yang tertera. Sertakan nominal unik pada berita transfer.","bank_accounts":[],"expiry_hours":24}'::jsonb, 'Manual deposit policy; bank_accounts must be filled by the owner', true),
+  ('deposit_policy', '{"min_amount":1000,"max_amount":5000000,"instructions":"Transfer ke rekening resmi yang tertera. Sertakan nominal unik pada berita transfer.","bank_accounts":[],"expiry_hours":24}'::jsonb, 'Manual deposit policy; bank_accounts must be filled by the owner', true),
   ('pricing_policy', '{"default_markup_bps":1500,"tax_bps":0,"tax_label":"PPN"}'::jsonb, 'Markup & tax configuration applied to supplier price', false),
   ('operations', '{"sales_open":true,"maintenance_message":"","order_poll_interval_ms":4000,"server_poll_interval_ms":15000,"order_expiry_seconds":1260,"max_active_orders_per_user":5}'::jsonb, 'Operational switches and polling cadence', true),
   ('refund_policy', '{"summary":"Refund otomatis hanya jika nomor tidak pernah menerima OTP dan supplier mengonfirmasi order selesai tanpa OTP. Refund dicatat pada ledger dan hanya terjadi satu kali."}'::jsonb, 'Customer facing refund policy summary', true),
@@ -1582,7 +1582,7 @@ create or replace function public.rpc_create_deposit(
   p_proof_size  integer,
   p_proof_sha256 text,
   p_user_note   text default null,
-  p_min_amount  numeric default 10000,
+  p_min_amount  numeric default 1000,
   p_max_amount  numeric default 5000000,
   p_max_pending integer default 3
 )
@@ -1594,13 +1594,14 @@ as $$
 declare
   v_deposit public.deposits;
   v_pending integer;
+  v_min_amount numeric := greatest(coalesce(p_min_amount, 1000), 1000);
 begin
   if p_amount is null or p_amount <= 0 then
     raise exception using errcode = 'P0001', message = 'INVALID_AMOUNT';
   end if;
-  if p_amount < p_min_amount then
+  if p_amount < v_min_amount then
     raise exception using errcode = 'P0001', message = 'DEPOSIT_BELOW_MINIMUM',
-      detail = format('minimum deposit is %s', p_min_amount);
+      detail = format('minimum deposit is %s', v_min_amount);
   end if;
   if p_amount > p_max_amount then
     raise exception using errcode = 'P0001', message = 'DEPOSIT_ABOVE_MAXIMUM',

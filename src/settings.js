@@ -2,6 +2,7 @@
 // SETTINGS SERVICE — small TTL cache around app_settings so that rendering a
 // page does not hit the database for every section. Writes invalidate the cache.
 // ============================================================================
+import { MINIMUM_TOPUP_AMOUNT, normalizeDepositPolicy } from './deposit-policy.js';
 
 const DEFAULTS = {
   store_profile: {
@@ -12,7 +13,7 @@ const DEFAULTS = {
     support_telegram: ''
   },
   deposit_policy: {
-    min_amount: 10000,
+    min_amount: MINIMUM_TOPUP_AMOUNT,
     max_amount: 5000000,
     instructions: '',
     bank_accounts: [],
@@ -44,7 +45,10 @@ export function createSettingsService({ db, logger, ttlMs = 20_000 }) {
   const cache = new Map();
   const publicCache = { value: null, expiresAt: 0, available: true, error: null };
 
-  const merge = (key, value) => ({ ...(DEFAULTS[key] || {}), ...(value && typeof value === 'object' ? value : {}) });
+  const merge = (key, value) => {
+    const merged = { ...(DEFAULTS[key] || {}), ...(value && typeof value === 'object' ? value : {}) };
+    return key === 'deposit_policy' ? normalizeDepositPolicy(merged) : merged;
+  };
 
   return {
     async get(key) {

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { AppError, errors } from './errors.js';
 import { decodeUpload } from './validation.js';
 import { fromDbAmount } from './money.js';
+import { normalizeDepositPolicy } from './deposit-policy.js';
 
 export function createDepositService({ db, settings, config, logger }) {
   const storageRoot = path.resolve(config.storageDir);
@@ -38,7 +39,7 @@ export function createDepositService({ db, settings, config, logger }) {
     toPublic,
 
     async policy() {
-      const policy = await settings.get('deposit_policy');
+      const policy = normalizeDepositPolicy(await settings.get('deposit_policy'));
       return {
         minAmount: fromDbAmount(policy.min_amount),
         maxAmount: fromDbAmount(policy.max_amount),

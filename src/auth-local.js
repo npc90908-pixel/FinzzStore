@@ -44,6 +44,15 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
     return profile;
   };
 
+  const auditAuthEvent = async (entry) => {
+    try {
+      await db.audit?.log?.(entry);
+    } catch {
+      // Audit failure must not turn an auth conflict into a session grant or
+      // leak provider details in an error response.
+    }
+  };
+
   /** Create the session row and return the raw tokens for the cookies. */
   const issueSession = async ({ userId, req }) => {
     const token = randomToken(32);
@@ -309,7 +318,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       const hash = row?.password_hash || '$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
       const valid = await verifyPassword(hash, password);
 
-      if (!row || !valid) {
+      if (!row || !row.password_auth_enabled || !valid) {
         if (row) {
           await db.call('rpc_note_login', {
             p_user_id: row.id, p_success: false,
@@ -367,29 +376,48 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
     },
 
     // ----------------------------------------------------- OAuth (Google)
-    // The provider has already proved ownership of a verified email, so this
-    // path neither asks for a password nor an OTP. An existing account is
-    // matched by email; a first-time visitor gets a normal profile + wallet
-    // with an unguessable random password (reset password still works later).
-    async loginWithProvider({ provider, email, name, req }) {
+    // Google subjects, not email addresses, identify an OAuth login. A verified
+    // Google email that matches an existing FINZZ account is never merged here;
+    // the user must sign in to FINZZ first and explicitly link Google in Profile.
+    async loginWithProvider({ provider, providerSubject, email, name, req }) {
       const normalised = String(email || '').trim().toLowerCase();
-      if (!normalised) throw new AppError('OAUTH_PROFILE_INVALID', 'Profil penyedia login tidak valid.', 400);
+      const subject = String(providerSubject || '').trim();
+      if (provider !== 'google' || !subject || subject.length > 255
+          || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalised)) {
+        throw new AppError('OAUTH_PROFILE_INVALID', 'Profil login Google tidak valid.', 400);
+      }
+
+      const linked = await db.oauthIdentities.findBySubject('google', subject);
+      if (linked) {
+        const profile = await readProfile(linked.user_id, linked.provider_email || normalised);
+        if (profile.status !== 'active') throw errors.accountSuspended();
+        await db.call('rpc_note_login', { p_user_id: profile.id, p_success: true }).catch(() => {});
+        const tokens = await issueSession({ userId: profile.id, req });
+        logger.info('google subject sign-in', { userId: profile.id });
+        return { user: publicUser(profile), profile, ...tokens, created: false };
+      }
 
       const existing = await db.profiles.byEmailWithSecret(normalised);
       if (existing) {
         if (existing.status !== 'active') throw errors.accountSuspended();
-        if (!existing.email_verified_at) {
-          await db.profiles.markEmailVerified(existing.id);
-        }
-        await db.call('rpc_note_login', { p_user_id: existing.id, p_success: true }).catch(() => {});
-        const profile = await readProfile(existing.id, existing.email);
-        const tokens = await issueSession({ userId: existing.id, req });
-        logger.info('provider sign-in', { provider, userId: existing.id });
-        return { user: publicUser(profile), profile, ...tokens, created: false };
+        await auditAuthEvent({
+          adminId: null,
+          action: 'oauth.google.login_email_conflict',
+          targetType: 'user',
+          targetId: existing.id,
+          reason: 'Google subject is not linked; explicit account linking is required',
+          after: { provider: 'google', email: normalised },
+          ip: req?.ip || null,
+          userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
+        });
+        throw new AppError(
+          'OAUTH_LINK_REQUIRED',
+          'Akun FINZZ dengan email ini sudah ada. Masuk dengan metode yang sudah terhubung, lalu tautkan Google dari halaman Profil.',
+          409
+        );
       }
 
-      const randomPassword = randomToken(24);
-      const passwordHash = await hashPassword(randomPassword);
+      const passwordHash = await hashPassword(randomToken(24));
       const localPart = (normalised.split('@')[0] || 'user')
         .toLowerCase()
         .replace(/[^a-z0-9_]+/g, '_')
@@ -403,41 +431,145 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       let created = null;
       for (const username of candidates) {
         try {
-          created = await db.call('rpc_register_user', {
-            p_email: normalised,
-            p_password_hash: passwordHash,
-            p_username: username
+          created = await db.oauthIdentities.createAccount({
+            email: normalised,
+            passwordHash,
+            username,
+            providerSubject: subject,
+            name,
+            ip: req?.ip || null,
+            userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
           });
           break;
         } catch (err) {
-          const code = String(err?.pgCode || err?.code || '');
-          if (code !== '23505' && code !== 'EMAIL_TAKEN') throw err;
-          // Either the email row appeared in a race, or only the username
-          // collided. Re-check by email; otherwise try the next candidate.
-          const raced = await db.profiles.byEmailWithSecret(normalised);
-          if (raced) {
-            if (raced.status !== 'active') throw errors.accountSuspended();
-            await db.profiles.markEmailVerified(raced.id);
-            const profile = await readProfile(raced.id, raced.email);
-            const tokens = await issueSession({ userId: raced.id, req });
-            logger.info('provider sign-in after race', { provider, userId: raced.id });
+          const bySubject = await db.oauthIdentities.findBySubject('google', subject).catch(() => null);
+          if (bySubject) {
+            const profile = await readProfile(bySubject.user_id, bySubject.provider_email || normalised);
+            if (profile.status !== 'active') throw errors.accountSuspended();
+            const tokens = await issueSession({ userId: profile.id, req });
             return { user: publicUser(profile), profile, ...tokens, created: false };
           }
+          const racedEmail = await db.profiles.byEmailWithSecret(normalised).catch(() => null);
+          if (racedEmail) {
+            await auditAuthEvent({
+              adminId: null,
+              action: 'oauth.google.login_email_conflict',
+              targetType: 'user',
+              targetId: racedEmail.id,
+              reason: 'Concurrent account creation requires explicit Google linking',
+              after: { provider: 'google', email: normalised },
+              ip: req?.ip || null,
+              userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
+            });
+            throw new AppError(
+              'OAUTH_LINK_REQUIRED',
+              'Akun FINZZ dengan email ini sudah ada. Masuk dengan metode yang sudah terhubung, lalu tautkan Google dari halaman Profil.',
+              409
+            );
+          }
+          const code = String(err?.pgCode || err?.code || '');
+          if (code !== '23505' && !String(err?.message || '').includes('EMAIL_TAKEN')) throw err;
         }
       }
-      if (!created) {
-        throw new AppError('OAUTH_SIGNUP_FAILED', 'Akun tidak dapat dibuat dari login Google. Coba lagi.', 500);
+
+      if (created?.identity) {
+        const profile = await readProfile(created.identity.user_id, normalised);
+        if (profile.status !== 'active') throw errors.accountSuspended();
+        const tokens = await issueSession({ userId: profile.id, req });
+        logger.info('google account created', { userId: profile.id });
+        return { user: publicUser(profile), profile, ...tokens, created: true };
       }
 
-      const profile = created.profile;
-      await db.profiles.markEmailVerified(profile.id);
-      if (name) {
-        await db.profiles.update(profile.id, { full_name: name }).catch(() => {});
+      if (created?.created && created.profile?.id) {
+        const profile = await readProfile(created.profile.id, normalised);
+        const tokens = await issueSession({ userId: profile.id, req });
+        logger.info('google account created', { userId: profile.id });
+        return { user: publicUser(profile), profile, ...tokens, created: true };
       }
-      const verifiedProfile = await readProfile(profile.id, normalised);
-      const tokens = await issueSession({ userId: profile.id, req });
-      logger.info('provider account created', { provider, userId: profile.id });
-      return { user: publicUser(verifiedProfile), profile: verifiedProfile, ...tokens, created: true };
+
+      if (created?.emailConflict) {
+        const raced = await db.profiles.byEmailWithSecret(normalised);
+        if (raced) {
+          await auditAuthEvent({
+            adminId: null, action: 'oauth.google.login_email_conflict', targetType: 'user', targetId: raced.id,
+            reason: 'Existing FINZZ account requires explicit Google linking',
+            after: { provider: 'google', email: normalised }, ip: req?.ip || null,
+            userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
+          });
+          throw new AppError('OAUTH_LINK_REQUIRED', 'Masuk ke akun FINZZ yang sudah ada, lalu tautkan Google dari Profil.', 409);
+        }
+      }
+
+      const racedIdentity = await db.oauthIdentities.findBySubject('google', subject).catch(() => null);
+      if (racedIdentity) {
+        const profile = await readProfile(racedIdentity.user_id, racedIdentity.provider_email || normalised);
+        const tokens = await issueSession({ userId: profile.id, req });
+        return { user: publicUser(profile), profile, ...tokens, created: false };
+      }
+      throw new AppError('OAUTH_SIGNUP_FAILED', 'Akun Google tidak dapat dibuat. Coba lagi.', 500);
+    },
+
+    async listLoginMethods(userId) {
+      const [profile, identities] = await Promise.all([
+        db.profiles.get(userId),
+        db.oauthIdentities.listForUser(userId)
+      ]);
+      return {
+        passwordEnabled: Boolean(profile?.password_auth_enabled),
+        identities: identities.map((identity) => ({
+          provider: identity.provider,
+          email: identity.provider_email,
+          name: identity.provider_name,
+          linkedAt: identity.linked_at
+        }))
+      };
+    },
+
+    async linkProvider({ auth, identity, req }) {
+      if (!auth?.profile?.id || identity?.provider !== 'google' || !identity.providerSubject || !identity.email) {
+        throw new AppError('OAUTH_PROFILE_INVALID', 'Identitas Google tidak valid.', 400);
+      }
+      const result = await db.oauthIdentities.link({
+        userId: auth.profile.id,
+        providerSubject: String(identity.providerSubject),
+        email: String(identity.email).toLowerCase(),
+        name: identity.name || null,
+        ip: req?.ip || null,
+        userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
+      });
+      if (result?.conflict) {
+        throw new AppError('OAUTH_IDENTITY_CONFLICT', 'Akun Google ini sudah terhubung ke akun FINZZ lain, atau akun ini telah memiliki Google berbeda.', 409);
+      }
+      if (!result?.linked) throw new AppError('OAUTH_LINK_FAILED', 'Google tidak dapat ditautkan ke akun ini.', 409);
+      logger.info('google identity linked', { userId: auth.profile.id });
+      return { linked: true, alreadyLinked: Boolean(result.alreadyLinked) };
+    },
+
+    async unlinkProvider({ auth, provider = 'google', password, req }) {
+      if (provider !== 'google') throw new AppError('OAUTH_PROVIDER_UNSUPPORTED', 'Penyedia login tidak didukung.', 400);
+      const methods = await service.listLoginMethods(auth.profile.id);
+      const hasOtherIdentity = methods.identities.some((item) => item.provider !== provider);
+      if (!hasOtherIdentity) {
+        const row = await db.profiles.byEmailWithSecret(auth.profile.email);
+        if (!row?.password_auth_enabled) {
+          throw new AppError('LAST_LOGIN_METHOD', 'Tautkan metode login lain atau atur password melalui pemulihan email sebelum melepas Google.', 409);
+        }
+        const valid = await verifyPassword(row.password_hash || '', String(password || ''));
+        if (!valid) throw new AppError('INVALID_CREDENTIALS', 'Password saat ini salah.', 401);
+      }
+      const result = await db.oauthIdentities.unlink({
+        userId: auth.profile.id,
+        ip: req?.ip || null,
+        userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
+      });
+      if (!result?.unlinked) {
+        if (result?.reason === 'LAST_LOGIN_METHOD') {
+          throw new AppError('LAST_LOGIN_METHOD', 'Akun harus memiliki metode login lain sebelum Google dilepas.', 409);
+        }
+        throw new AppError('OAUTH_NOT_LINKED', 'Google belum ditautkan ke akun ini.', 404);
+      }
+      logger.info('google identity unlinked', { userId: auth.profile.id });
+      return { unlinked: true };
     },
 
     // -------------------------------------------------------------- logout
@@ -654,7 +786,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
 
       const passwordHash = await hashPassword(newPassword);
       await db.query(
-        'update public.profiles set password_hash = $2, password_updated_at = now() where id = $1',
+        'update public.profiles set password_hash = $2, password_updated_at = now(), password_auth_enabled = true where id = $1',
         [auth.profile.id, passwordHash], { table: 'profiles' }
       );
       // Keep the current device signed in, drop the rest.

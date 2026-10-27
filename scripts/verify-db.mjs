@@ -16,7 +16,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const REQUIRED_TABLES = [
   'profiles', 'wallets', 'wallet_transactions', 'deposits', 'services',
-  'orders', 'order_events', 'app_settings', 'admin_audit_logs'
+  'orders', 'order_events', 'app_settings', 'admin_audit_logs', 'oauth_identities'
 ];
 
 const REQUIRED_RPCS = [
@@ -26,7 +26,8 @@ const REQUIRED_RPCS = [
   'rpc_set_user_status', 'rpc_claim_orders_for_sync', 'rpc_release_order_lease',
   'rpc_flag_orphan_pending_orders', 'rpc_acquire_job_lease', 'rpc_release_job_lease',
   'rpc_sync_services', 'rpc_record_webhook_event', 'rpc_public_summary', 'rpc_admin_dashboard',
-  'rpc_rate_limit_hit', 'ensure_user_profile'
+  'rpc_rate_limit_hit', 'ensure_user_profile', 'rpc_link_google_identity',
+  'rpc_create_google_account', 'rpc_unlink_google_identity'
 ];
 
 const USER_WRITABLE_TABLES = ['profiles', 'wallets', 'wallet_transactions', 'deposits', 'orders', 'order_events'];
@@ -65,7 +66,7 @@ async function main() {
         where n.nspname = 'public' and c.relkind = 'r'`
     );
     for (const row of rls) {
-      if (USER_WRITABLE_TABLES.includes(row.table) && !row.enabled) {
+      if ((USER_WRITABLE_TABLES.includes(row.table) || row.table === 'oauth_identities') && !row.enabled) {
         problems.push(`row level security is disabled on ${row.table}`);
       }
     }

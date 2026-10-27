@@ -56,7 +56,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['auth_tokens', 'sessions', 'cron_locks', 'idempotency_keys',
-                           'supplier_webhook_events', 'admin_audit_logs']
+                           'supplier_webhook_events', 'admin_audit_logs', 'oauth_identities']
   loop
     if to_regclass('public.' || t) is not null then
       execute format('revoke all on table public.%I from anon, authenticated', t);

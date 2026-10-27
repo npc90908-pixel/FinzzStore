@@ -31,6 +31,7 @@ export default async function login(ctx) {
   const oauthErrors = {
     denied: 'Login Google dibatalkan. Anda dapat mencoba lagi atau masuk dengan email.',
     state: 'Sesi login Google kedaluwarsa. Silakan mulai lagi.',
+    'link-required': 'Email Google ini sudah dipakai akun FINZZ. Masuk dengan metode yang sudah terhubung, lalu tautkan Google dari halaman Profil.',
     unverified: 'Email Google belum terverifikasi. Gunakan email dan password untuk masuk.',
     failed: 'Login Google gagal. Coba lagi atau masuk dengan email.',
     unavailable: 'Login Google sedang tidak tersedia.'

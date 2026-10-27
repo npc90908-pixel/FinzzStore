@@ -1,10 +1,11 @@
 // ============================================================================
 // SERVICES / BUY FLOW
-// The client never sends a price: the server re-quotes the supplier and debits
-// the wallet inside one transaction. The idempotency key is created when the
-// confirmation modal opens and reused if the user retries.
+// Guest-readable TeleKos discovery. The browser selects supplier IDs and an
+// offer; the server revalidates the offer and price before atomically debiting
+// the wallet. Browser-supplied prices are only a confirmation guard, never an
+// amount of record.
 // ============================================================================
-import { el, Button, Badge, Card, Skeleton, EmptyState, Modal, Alert, toast, PageHeader } from '../ui.js';
+import { el, Button, Badge, Card, Skeleton, EmptyState, Modal, Alert, toast, PageHeader, Input } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { ApiError, newIdempotencyKey } from '../api.js';
@@ -15,490 +16,529 @@ const APP_ICON = {
   TikTok: 'play', Discord: 'users', Facebook: 'users', X: 'x', Shopee: 'inbox', Grab: 'zap'
 };
 
+const timestamp = (value) => value ? formatDate(value) : 'tidak disediakan';
+
 export default async function services(ctx) {
   const { api, store, navigate, layout } = ctx;
-
-  let catalog = null;
-  let activeApp = null;
-  let selected = null;
-
-  // Catalogue filters. Everything is applied client-side to the already
-  // fetched catalogue: the server has one authoritative price list, and
-  // re-querying per keystroke would hammer the API for no benefit.
-  const filters = {
-    query: '',
-    country: 'all',
-    maxPrice: 'all',
+  const signedIn = Boolean(store.get('user'));
+  const params = new URLSearchParams(window.location.search);
+  const state = {
+    servers: [], server: null,
+    apps: [], app: null,
+    countries: [], country: null,
+    offers: [], pricesMeta: null,
+    loading: false,
+    countrySearch: '',
+    availableOnly: true,
     sort: 'price-asc',
-    availableOnly: true
+    serverRequest: 0,
+    appRequest: 0,
+    countryRequest: 0,
+    priceRequest: 0
   };
-  // Incremental loading: 24 at a time keeps the first paint fast on mobile and
-  // avoids rendering hundreds of buttons that are never seen.
-  const PAGE_SIZE = 24;
-  let visibleCount = PAGE_SIZE;
 
-  const listArea = el('div', { class: 'stack' });
-  const detailArea = el('div', { class: 'card' }, el('div', { class: 'card__body' }, Skeleton({ lines: 4 })));
-  const appTabs = el('div', { class: 'pill-row' });
   const metaRow = el('div', { class: 'row row--between row--wrap' });
-  const filterBar = el('div', { class: 'filter-bar' });
-
-  const priceSort = (a, b, dir) => (dir === 'desc' ? b.price - a.price : a.price - b.price);
-  const nameSort = (a, b) => String(a.countryName || a.name).localeCompare(String(b.countryName || b.name), 'id');
-
-  /** Apply every filter to a flat service list. Pure: returns a new array. */
-  const applyFilters = (services) => {
-    const q = filters.query.trim().toLowerCase();
-    const maxPrice = filters.maxPrice === 'all' ? null : Number(filters.maxPrice);
-    let list = services.filter((s) => {
-      if (filters.availableOnly && !(s.stock > 0 && s.active !== false)) return false;
-      if (filters.country !== 'all' && String(s.countryId) !== String(filters.country)) return false;
-      if (maxPrice !== null && Number(s.price) > maxPrice) return false;
-      if (q) {
-        const haystack = `${s.appName || ''} ${s.countryName || ''} ${s.name || ''} ${s.callingCode || ''}`.toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
-    });
-    switch (filters.sort) {
-      case 'price-desc': list = list.sort((a, b) => priceSort(a, b, 'desc')); break;
-      case 'name-asc': list = list.sort(nameSort); break;
-      case 'stock-desc': list = list.sort((a, b) => (b.stock || 0) - (a.stock || 0)); break;
-      default: list = list.sort((a, b) => priceSort(a, b, 'asc'));
-    }
-    return list;
-  };
-
-  const isFiltering = () =>
-    filters.query.trim() !== '' || filters.country !== 'all' || filters.maxPrice !== 'all' || !filters.availableOnly;
-
+  const filtersArea = el('div', { class: 'filter-bar' });
+  const catalogArea = el('div', { class: 'grid grid--sidebar' },
+    el('div', { class: 'stack' }, Skeleton({ lines: 5 })),
+    el('div', { class: 'card' }, el('div', { class: 'card__body' }, Skeleton({ lines: 4 })))
+  );
   const content = el('div', { class: 'page animate-rise' },
     PageHeader({
-      eyebrow: 'Katalog',
+      eyebrow: 'Katalog TeleKos',
       iconName: 'grid',
       title: 'Beli nomor virtual',
-      subtitle: 'Pilih aplikasi dan negara. Harga diambil langsung dari katalog supplier dan dikonfirmasi ulang saat order dibuat.',
-      actions: Button({ variant: 'outline', iconName: 'wallet', children: 'Isi saldo', onClick: () => navigate('/wallet') })
+      subtitle: 'Jelajahi server, aplikasi, negara, dan penawaran. Harga dikonfirmasi ulang sebelum saldo dipotong.',
+      actions: Button({
+        variant: 'outline', iconName: 'wallet', children: signedIn ? 'Isi saldo' : 'Masuk untuk isi saldo',
+        onClick: () => navigate(signedIn ? '/wallet' : '/login?next=%2Fwallet')
+      })
     }),
     metaRow,
-    filterBar,
-    appTabs,
-    el('div', { class: 'grid grid--sidebar' }, listArea, detailArea)
+    filtersArea,
+    catalogArea
   );
 
-  // A visitor without an account may browse the catalogue; the buying actions
-  // route to login. The server still enforces this — the UI is a courtesy.
-  const signedIn = Boolean(store.get('user'));
   const shell = signedIn
     ? appShell(layout, 'services', content).shell
     : el('div', { class: 'app-shell' },
         layout.header({ variant: 'public' }),
         el('main', { class: 'main', attrs: { id: 'main' } },
           content,
-          el('div', { class: 'container' },
-            Alert({
-              tone: 'info',
-              title: 'Masuk untuk membeli',
-              children: 'Anda bisa menjelajahi seluruh katalog dan harga tanpa akun. Untuk membeli nomor, masuk atau daftar — pilihan Anda akan kami bawa kembali ke sini.'
-            })
-          )
+          el('div', { class: 'container' }, Alert({
+            tone: 'info',
+            title: 'Masuk untuk membeli',
+            children: 'Anda dapat melihat katalog dan harga tanpa akun. Sebelum pembelian, masuk atau daftar; konteks penawaran akan dibawa kembali dan diperiksa ulang.'
+          }))
         ),
         layout.footer({ compact: true })
       );
 
-  const renderDetail = (service) => {
-    if (!service) {
-      detailArea.replaceChildren(
-        el('div', { class: 'card__body' },
-          EmptyState({ title: 'Pilih negara', description: 'Rincian harga dan tombol pembelian muncul setelah Anda memilih salah satu negara.', iconName: 'globe' })
-        )
-      );
+  function renderMeta(cache = null) {
+    const items = [];
+    if (state.servers.length) items.push(el('span', { class: 'badge badge--brand' }, icon('server', { size: 13 }), el('span', { text: `${formatNumber(state.servers.length)} server` })));
+    if (state.apps.length) items.push(el('span', { class: 'badge badge--neutral' }, icon('layers', { size: 13 }), el('span', { text: `${formatNumber(state.apps.length)} aplikasi` })));
+    if (cache?.source === 'mock') items.push(el('span', { class: 'badge badge--warning' }, el('span', { text: 'Data demo (mock)' })));
+    if (cache?.source === 'telekos') items.push(el('span', { class: 'badge badge--success' }, el('span', { text: 'Sumber TeleKos' })));
+    metaRow.replaceChildren(
+      el('div', { class: 'pill-row' }, ...items),
+      cache?.fetchedAt
+        ? el('span', { class: 'text-xs text-dim', text: `Respons diterima ${timestamp(cache.fetchedAt)}${cache.cacheHit ? ' · dari cache' : ''}` })
+        : null
+    );
+  }
+
+  function renderControls() {
+    if (!state.servers.length) {
+      filtersArea.replaceChildren(Alert({ tone: 'warning', title: 'Server belum tersedia', children: 'Supplier belum mengembalikan data server yang dapat ditampilkan.' }));
       return;
     }
 
-    const priceRow = el('div', { class: 'row row--between' }, el('span', { class: 'text-sm text-muted', text: 'Harga' }), el('strong', { class: 'mono', text: formatRupiah(service.price) }));
-    const stockRow = el('div', { class: 'row row--between' }, el('span', { class: 'text-sm text-muted', text: 'Stok tersedia' }), el('span', { class: 'text-sm', text: formatNumber(service.stock) }));
-
-    const buyButton = signedIn
-      ? Button({
-          variant: 'primary',
-          size: 'lg',
-          block: true,
-          iconName: 'zap',
-          children: 'Beli sekarang',
-          onClick: () => openConfirm(service)
-        })
-      : Button({
-          variant: 'primary',
-          size: 'lg',
-          block: true,
-          iconName: 'login',
-          children: 'Masuk untuk membeli',
-          // The chosen service survives the round trip, so the visitor resumes
-          // exactly where they were instead of hunting for it again.
-          onClick: () => navigate(`/login?next=${encodeURIComponent(`/services?service=${service.id}`)}`)
-        });
-
-    detailArea.replaceChildren(
-      el('header', { class: 'card__head' },
-        el('div', {},
-          el('h2', { class: 'card__title', text: `${service.appName} · ${service.countryName}` }),
-          el('p', { class: 'card__subtitle', text: service.code })
-        ),
-        Badge({ tone: service.stock > 0 ? 'success' : 'warning', dot: true, children: service.stock > 0 ? 'Tersedia' : 'Stok kosong' })
-      ),
-      el('div', { class: 'card__body stack' },
-        el('div', { class: 'stack', style: { gap: '10px' } }, priceRow, stockRow,
-          signedIn
-            ? el('div', { class: 'row row--between' },
-                el('span', { class: 'text-sm text-muted', text: 'Saldo Anda' }),
-                el('span', { class: 'text-sm mono', text: formatRupiah(store.get('balance') ?? 0) })
-              )
-            : el('div', { class: 'row row--between' },
-                el('span', { class: 'text-sm text-muted', text: 'Status' }),
-                el('span', { class: 'text-sm', text: 'Menjelajah tanpa akun' })
-              )
-        ),
-        el('div', { class: 'text-xs text-dim', text: `Harga katalog diperbarui ${formatDate(service.syncedAt)}. Harga final dikonfirmasi ulang saat order dibuat.` }),
-        buyButton,
-        el('p', { class: 'text-xs text-dim', text: 'Saldo dipotong satu kali. Jika supplier menolak pembelian, saldo dikembalikan otomatis.' })
-      )
-    );
-  };
-
-  const openConfirm = (service) => {
-    const idempotencyKey = newIdempotencyKey('ord');
-    const body = el('div', { class: 'stack' });
-    const quoteArea = el('div', {}, Skeleton({ lines: 3 }));
-    const errorArea = el('div');
-    body.append(
-      el('div', { class: 'row' },
-        el('span', { class: 'service-card__logo' }, icon(APP_ICON[service.appName] || 'smartphone', { size: 18 })),
-        el('div', {},
-          el('div', { class: 'service-card__name', text: `${service.appName} ${service.countryName}` }),
-          el('div', { class: 'service-card__meta', text: `Nomor ${service.callingCode || ''} · stok ${formatNumber(service.stock)}` })
-        )
-      ),
-      quoteArea,
-      errorArea,
-      el('p', { class: 'text-xs text-dim', text: 'Dengan melanjutkan, saldo Anda dipotong sesuai harga final di atas. Order tidak dapat dibatalkan setelah OTP diterima.' })
-    );
-
-    const confirmButton = Button({
-      variant: 'primary',
-      size: 'lg',
-      children: 'Konfirmasi & potong saldo',
-      disabled: true,
-      onClick: async () => {
-        if (confirmButton.dataset.loading === '1') return;
-        confirmButton.dataset.loading = '1';
-        confirmButton.disabled = true;
-        confirmButton.replaceChildren(el('span', { class: 'btn__spinner' }), el('span', { text: 'Memproses…' }));
-        try {
-          const result = await api.post('/api/orders', { service_id: service.id, idempotency_key: idempotencyKey });
-          modal.close();
-          store.set({ balance: result.balance });
-          if (result.notice?.type === 'refunded') {
-            toast({ type: 'warning', title: 'Pembelian ditolak supplier', message: result.notice.message });
-            navigate('/orders');
-            return;
-          }
-          if (result.pending) {
-            toast({ type: 'info', title: 'Sedang dikonfirmasi', message: result.notice?.message || 'Order sedang dikonfirmasi ke supplier.' });
-          } else {
-            toast({ type: 'success', title: 'Order dibuat', message: 'Nomor sedang disiapkan. OTP akan muncul otomatis.' });
-          }
-          navigate(`/orders?id=${result.order.id}`);
-        } catch (err) {
-          const message = err instanceof ApiError ? err.message : 'Pembelian gagal.';
-          errorArea.replaceChildren(
-            Alert({ tone: 'danger', title: err?.code === 'INSUFFICIENT_BALANCE' ? 'Saldo tidak cukup' : 'Pembelian gagal', children: message })
-          );
-          if (err?.code === 'INSUFFICIENT_BALANCE') {
-            errorArea.appendChild(
-              el('div', { style: { marginTop: '10px' } },
-                Button({ variant: 'outline', size: 'sm', iconName: 'wallet', children: 'Isi saldo sekarang', onClick: () => { modal.close(); navigate('/wallet'); } })
-              )
-            );
-          }
-          confirmButton.dataset.loading = '0';
-          confirmButton.disabled = false;
-          confirmButton.replaceChildren(el('span', { text: 'Coba lagi' }));
-        }
-      }
-    });
-
-    const modal = Modal({
-      title: 'Konfirmasi pembelian',
-      description: 'Periksa rincian sebelum saldo dipotong.',
-      body,
-      actions: [Button({ variant: 'ghost', children: 'Batal', onClick: () => modal.close() }), confirmButton]
-    });
-
-    (async () => {
-      try {
-        const quote = await api.get(`/api/public/quote?service_id=${encodeURIComponent(service.id)}`);
-        const p = quote.price;
-        quoteArea.replaceChildren(
-          el('dl', { class: 'kv' },
-            el('dt', { text: 'Harga supplier' }), el('dd', { class: 'mono', text: formatRupiah(p.supplierPrice) }),
-            el('dt', { text: 'Markup layanan' }), el('dd', { class: 'mono', text: formatRupiah(p.markupAmount) }),
-            p.taxAmount > 0 ? el('dt', { text: 'Pajak' }) : null,
-            p.taxAmount > 0 ? el('dd', { class: 'mono', text: formatRupiah(p.taxAmount) }) : null,
-            el('dt', { text: 'Total dibayar' }), el('dd', { class: 'mono', style: { fontWeight: '700' }, text: formatRupiah(p.totalPrice) }),
-            el('dt', { text: 'Stok saat ini' }), el('dd', { text: formatNumber(quote.stock) })
-          ),
-          quote.live ? null : Alert({ tone: 'warning', title: 'Harga tersinkron', children: 'Harga live supplier belum tersedia; harga katalog terakhir digunakan dan diverifikasi ulang oleh server.' })
-        );
-        confirmButton.disabled = (store.get('balance') ?? 0) < p.totalPrice;
-        if (confirmButton.disabled) {
-          errorArea.replaceChildren(
-            Alert({ tone: 'warning', title: 'Saldo tidak cukup', children: `Anda membutuhkan ${formatRupiah(p.totalPrice)}. Silakan isi saldo terlebih dahulu.` })
-          );
-        }
-      } catch (err) {
-        quoteArea.replaceChildren(
-          el('div', { class: 'row row--between' },
-            el('span', { class: 'text-sm text-muted', text: 'Harga katalog' }),
-            el('strong', { class: 'mono', text: formatRupiah(service.price) })
-          ),
-          Alert({ tone: 'warning', title: 'Harga live tidak tersedia', children: err instanceof ApiError ? err.message : 'Server akan memvalidasi harga saat konfirmasi.' })
-        );
-        confirmButton.disabled = (store.get('balance') ?? 0) < service.price;
-      }
-    })();
-  };
-
-  const renderFilterBar = () => {
-    const countries = catalog?.countries || [];
-    const searchInput = el('input', {
+    const serverSelect = el('select', {
       class: 'input',
-      attrs: {
-        type: 'search', placeholder: 'Cari aplikasi atau negara…', 'aria-label': 'Cari layanan',
-        value: filters.query, autocomplete: 'off'
-      },
-      onInput: (event) => {
-        filters.query = event.target.value;
-        visibleCount = PAGE_SIZE;
-        renderResults();
-      }
-    });
+      attrs: { 'aria-label': 'Pilih server' },
+      onChange: (event) => loadApps(event.target.value)
+    }, ...state.servers.map((server) => el('option', {
+      attrs: { value: server.id, selected: String(server.id) === String(state.server) ? '' : null },
+      text: `${server.name}${server.maintenance ? ' · maintenance' : !server.available ? ' · tidak tersedia' : ''}`
+    })));
 
-    const countrySelect = el('select', {
+    const appSelect = el('select', {
       class: 'input',
-      attrs: { 'aria-label': 'Filter negara' },
-      onChange: (event) => { filters.country = event.target.value; visibleCount = PAGE_SIZE; renderResults(); }
+      attrs: { 'aria-label': 'Pilih aplikasi', disabled: !state.apps.length },
+      onChange: (event) => loadCountries(event.target.value)
     },
-      el('option', { attrs: { value: 'all' }, text: 'Semua negara' }),
-      ...countries.map((c) => el('option', {
-        attrs: { value: String(c.id), selected: String(c.id) === String(filters.country) ? '' : null },
-        text: c.name
+      el('option', { attrs: { value: '' }, text: state.apps.length ? 'Pilih aplikasi' : 'Memuat aplikasi…' }),
+      ...state.apps.map((app) => el('option', {
+        attrs: { value: app.id, selected: String(app.id) === String(state.app) ? '' : null },
+        text: app.name
       }))
     );
 
-    const priceSelect = el('select', {
+    const search = el('input', {
       class: 'input',
-      attrs: { 'aria-label': 'Harga maksimum' },
-      onChange: (event) => { filters.maxPrice = event.target.value; visibleCount = PAGE_SIZE; renderResults(); }
-    },
-      ...[['all', 'Semua harga'], ['5000', 'Di bawah Rp5.000'], ['10000', 'Di bawah Rp10.000'], ['25000', 'Di bawah Rp25.000'], ['50000', 'Di bawah Rp50.000']]
-        .map(([value, label]) => el('option', { attrs: { value, selected: value === filters.maxPrice ? '' : null }, text: label }))
-    );
+      attrs: { type: 'search', placeholder: 'Cari negara, ISO, atau kode telepon', 'aria-label': 'Cari negara' },
+      onInput: (event) => { state.countrySearch = event.target.value; renderCountries(); }
+    });
+    search.value = state.countrySearch;
 
     const sortSelect = el('select', {
       class: 'input',
-      attrs: { 'aria-label': 'Urutkan' },
-      onChange: (event) => { filters.sort = event.target.value; renderResults(); }
+      attrs: { 'aria-label': 'Urutkan penawaran' },
+      onChange: (event) => { state.sort = event.target.value; renderOffers(); }
     },
-      ...[['price-asc', 'Termurah'], ['price-desc', 'Termahal'], ['name-asc', 'Nama A–Z'], ['stock-desc', 'Stok terbanyak']]
-        .map(([value, label]) => el('option', { attrs: { value, selected: value === filters.sort ? '' : null }, text: label }))
+      ...[['price-asc', 'Harga termurah'], ['price-desc', 'Harga termahal'], ['stock-desc', 'Stok terbanyak']]
+        .map(([value, label]) => el('option', { attrs: { value, selected: value === state.sort ? '' : null }, text: label }))
     );
 
     const availableToggle = el('label', { class: 'row', attrs: { style: 'gap:8px;align-items:center' } },
       el('input', {
-        attrs: { type: 'checkbox', checked: filters.availableOnly ? '' : null },
-        onChange: (event) => { filters.availableOnly = event.target.checked; visibleCount = PAGE_SIZE; renderResults(); }
+        attrs: { type: 'checkbox', checked: state.availableOnly ? '' : null },
+        onChange: (event) => { state.availableOnly = event.target.checked; renderCountries(); renderOffers(); }
       }),
-      el('span', { class: 'text-sm text-muted', text: 'Hanya yang ada stok' })
+      el('span', { class: 'text-sm text-muted', text: 'Hanya tampilkan stok tersedia' })
     );
 
-    filterBar.replaceChildren(
-      el('div', { class: 'filter-bar__fields' },
-        el('div', { class: 'filter-bar__search' }, searchInput),
-        countrySelect, priceSelect, sortSelect, availableToggle
-      ),
-      isFiltering()
-        ? Button({
-            variant: 'ghost', size: 'sm', iconName: 'refresh', children: 'Reset filter',
-            onClick: () => {
-              filters.query = ''; filters.country = 'all'; filters.maxPrice = 'all';
-              filters.sort = 'price-asc'; filters.availableOnly = true; visibleCount = PAGE_SIZE;
-              renderFilterBar(); renderResults();
-            }
-          })
-        : null
+    filtersArea.replaceChildren(
+      el('div', { class: 'filter-bar__fields' }, serverSelect, appSelect, search, sortSelect, availableToggle)
     );
-  };
+  }
 
-  const countryCard = (service) => {
-    const chip = el('button', {
-      class: 'country-chip',
-      attrs: { type: 'button', 'aria-pressed': String(selected?.id === service.id) },
-      onClick: () => {
-        for (const other of listArea.querySelectorAll('.country-chip')) other.setAttribute('aria-pressed', 'false');
-        chip.setAttribute('aria-pressed', 'true');
-        selected = service;
-        renderDetail(service);
-        if (window.innerWidth < 900) detailArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    },
-      el('span', { class: 'stack', style: { gap: '2px' } },
-        el('span', { text: filters.query ? `${service.appName} · ${service.countryName}` : service.countryName }),
-        el('span', { class: 'country-chip__stock', text: formatRupiah(service.price) })
-      ),
-      el('span', { class: 'country-chip__stock', text: formatNumber(service.stock) })
-    );
-    return chip;
-  };
+  function countryList() {
+    const query = state.countrySearch.trim().toLowerCase();
+    return state.countries.filter((country) => {
+      if (state.availableOnly && !(country.stock > 0)) return false;
+      if (!query) return true;
+      return `${country.name || ''} ${country.iso || ''} ${country.callingCode || ''}`.toLowerCase().includes(query);
+    }).sort((a, b) => String(a.name).localeCompare(String(b.name), 'id'));
+  }
 
-  /** Render either the selected app's countries or global search results. */
-  const renderResults = () => {
-    if (!catalog) return;
-    const searching = filters.query.trim() !== '';
-    const all = catalog.services || [];
-    const app = (catalog.apps || []).find((a) => a.id === activeApp);
-
-    // Two sources, deliberately:
-    //   · no filters  -> the active app's own `countries` array (exactly what
-    //                    the tab promised, no extra work);
-    //   · any filter  -> the flat catalogue, so a price cap or a country search
-    //                    can cross app boundaries instead of silently
-    //                    pretending the other apps do not exist.
-    let services;
-    // `availableOnly` means the same thing in both branches: an offer that the
-    // supplier cannot currently fill is not offered for sale. The unfiltered
-    // path used to skip this check and listed zero-stock countries with a
-    // working buy button, so it is applied here as well.
-    const inStock = (list) => (filters.availableOnly ? list.filter((s) => s.stock > 0 && s.active !== false) : list);
-    let soldOutApp = false;
-    if (!isFiltering() && !searching && app) {
-      const countries = (app.countries || []).slice().sort((a, b) => priceSort(a, b, 'asc'));
-      services = inStock(countries);
-      soldOutApp = services.length === 0 && countries.length > 0;
-    } else {
-      const pool = searching || !activeApp ? all : all;
-      services = applyFilters(pool);
-      if (!searching && app && filters.country === 'all') {
-        services = services.filter((s) => String(s.appId) === String(activeApp));
-      }
-    }
-
-    if (services.length === 0) {
-      listArea.replaceChildren(
-        el('div', { class: 'card' }, el('div', { class: 'card__body' },
-          soldOutApp
-            ? EmptyState({
-                title: 'Stok sedang kosong',
-                description: 'Semua negara untuk aplikasi ini belum ada stok saat ini. Matikan “Hanya yang ada stok” untuk melihat daftar negaranya tanpa membeli.',
-                iconName: 'alert'
-              })
-            : EmptyState({
-                title: 'Tidak ada layanan yang cocok',
-                description: 'Coba ubah kata kunci, negara, atau batas harga.',
-                iconName: 'search'
-              }),
-          Button({ variant: 'outline', size: 'sm', children: soldOutApp ? 'Tampilkan semua negara' : 'Reset filter', onClick: () => {
-            filters.query = ''; filters.country = 'all'; filters.maxPrice = 'all'; filters.availableOnly = soldOutApp ? false : true;
-            visibleCount = PAGE_SIZE; renderFilterBar(); renderResults();
-          } })
-        ))
+  function renderCountries() {
+    if (!state.app) {
+      catalogArea.replaceChildren(
+        el('div', { class: 'card' }, el('div', { class: 'card__body' }, EmptyState({
+          title: 'Pilih aplikasi', description: 'Negara dan penawaran akan dimuat dari supplier setelah aplikasi dipilih.', iconName: 'grid'
+        }))),
+        el('div', { class: 'card' }, el('div', { class: 'card__body' }, EmptyState({
+          title: 'Belum ada penawaran dipilih', description: 'Pilih aplikasi lalu negara untuk memeriksa harga.', iconName: 'globe'
+        })))
       );
       return;
     }
 
-    const shown = services.slice(0, visibleCount);
-    const headerTitle = searching || filters.country !== 'all'
-      ? `${formatNumber(services.length)} layanan cocok`
-      : app ? `${app.name} — pilih negara` : 'Layanan';
-
-    const grid = el('div', { class: 'country-grid' }, ...shown.map(countryCard));
-
-    listArea.replaceChildren(
-      el('div', { class: 'card' },
-        el('header', { class: 'card__head' },
-          el('div', {},
-            el('h2', { class: 'card__title', text: headerTitle }),
-            el('p', { class: 'card__subtitle', text: `Menampilkan ${formatNumber(shown.length)} dari ${formatNumber(services.length)} · diurutkan ${filters.sort === 'price-desc' ? 'termahal' : filters.sort === 'name-asc' ? 'nama A–Z' : filters.sort === 'stock-desc' ? 'stok terbanyak' : 'termurah'}` })
-          ),
-          el('span', { class: 'text-xs text-dim', text: catalog.syncedAt ? `Harga ${formatDate(catalog.syncedAt)}` : 'Belum ada timestamp' })
+    const countries = countryList();
+    const listCard = el('div', { class: 'card' },
+      el('header', { class: 'card__head' },
+        el('div', {},
+          el('h2', { class: 'card__title', text: `${state.apps.find((app) => String(app.id) === String(state.app))?.name || state.app} · pilih negara` }),
+          el('p', { class: 'card__subtitle', text: `${formatNumber(countries.length)} dari ${formatNumber(state.countries.length)} negara ditampilkan` })
         ),
-        el('div', { class: 'card__body' },
-          grid,
-          shown.length < services.length
-            ? el('div', { class: 'row', attrs: { style: 'justify-content:center;margin-top:14px' } },
-                Button({
-                  variant: 'outline', size: 'sm', children: `Muat ${Math.min(PAGE_SIZE, services.length - shown.length)} lagi`,
-                  onClick: () => { visibleCount += PAGE_SIZE; renderResults(); }
-                }))
-            : null
-        )
+        state.countriesMeta?.fetchedAt ? el('span', { class: 'text-xs text-dim', text: `Respons ${timestamp(state.countriesMeta.fetchedAt)}` }) : null
+      ),
+      el('div', { class: 'card__body' }, countries.length
+        ? el('div', { class: 'country-grid' }, ...countries.map((country) => {
+            const active = String(country.id) === String(state.country);
+            return el('button', {
+              class: 'country-chip',
+              attrs: { type: 'button', 'aria-pressed': String(active) },
+              onClick: () => loadPrices(country.id)
+            },
+              el('span', { class: 'stack', style: { gap: '2px' } },
+                el('span', { text: country.name }),
+                el('span', { class: 'country-chip__stock', text: [country.iso, country.callingCode].filter(Boolean).join(' · ') || '—' })
+              ),
+              el('span', { class: 'country-chip__stock', text: `${formatNumber(country.stock)} stok` })
+            );
+          }))
+        : EmptyState({
+            title: 'Tidak ada negara yang cocok',
+            description: 'Ubah pencarian atau matikan filter stok untuk menampilkan semua data negara.',
+            iconName: 'search'
+          })
       )
     );
-  };
 
-  const renderApp = (appId) => {
-    activeApp = appId;
-    const apps = catalog.apps || [];
-    appTabs.replaceChildren(
-      ...apps.map((app) => {
-        const active = app.id === activeApp;
-        return el('button', {
-          class: `country-chip${active ? ' is-active' : ''}`,
-          attrs: { type: 'button', 'aria-pressed': String(active) },
-          onClick: () => { filters.query = ''; renderApp(app.id); }
-        }, el('span', { class: 'row', style: { gap: '6px' } }, icon(APP_ICON[app.name] || 'smartphone', { size: 15 }), el('span', { text: app.name })));
-      })
+    const offersCard = el('div', { class: 'card' });
+    renderOffers(offersCard);
+    catalogArea.replaceChildren(listCard, offersCard);
+  }
+
+  function renderOffers(target = null) {
+    const offersCard = target || catalogArea.children[1];
+    if (!offersCard) return;
+    if (!state.country) {
+      offersCard.replaceChildren(el('div', { class: 'card__body' }, EmptyState({
+        title: 'Pilih negara', description: 'Semua penawaran yang dikembalikan untuk negara terpilih akan tampil di sini.', iconName: 'globe'
+      })));
+      return;
+    }
+
+    const country = state.countries.find((item) => String(item.id) === String(state.country));
+    const app = state.apps.find((item) => String(item.id) === String(state.app));
+    const head = el('header', { class: 'card__head' },
+      el('div', {},
+        el('h2', { class: 'card__title', text: `${app?.name || state.app} · ${country?.name || state.country}` }),
+        el('p', { class: 'card__subtitle', text: state.pricesMeta?.providerQuotedAt
+          ? `Waktu quote supplier: ${timestamp(state.pricesMeta.providerQuotedAt)}`
+          : state.pricesMeta?.fetchedAt
+            ? `Waktu respons aplikasi: ${timestamp(state.pricesMeta.fetchedAt)} · supplier tidak memberi timestamp quote`
+            : 'Memeriksa harga…' })
+      ),
+      Button({ variant: 'ghost', size: 'sm', iconName: 'refresh', children: 'Perbarui harga', onClick: () => loadPrices(state.country, { refresh: true }) })
     );
 
-    selected = null;
-    renderDetail(null);
-    visibleCount = PAGE_SIZE;
-    renderResults();
-  };
-
-  const load = async () => {
-    try {
-      catalog = await api.get('/api/public/catalog');
-      const settings = store.get('publicSettings') || {};
-      const salesOpen = settings.operations?.salesOpen !== false;
-
-      metaRow.replaceChildren(
-        el('div', { class: 'pill-row' },
-          el('span', { class: 'badge badge--brand' }, icon('layers', { size: 13 }), el('span', { text: `${formatNumber(catalog.services.length)} layanan` })),
-          el('span', { class: 'badge badge--neutral' }, icon('globe', { size: 13 }), el('span', { text: `${formatNumber(catalog.countries.length)} negara` })),
-          catalog.source === 'mock' ? el('span', { class: 'badge badge--warning' }, el('span', { text: 'Data demo (mock)' })) : null,
-          salesOpen ? null : el('span', { class: 'badge badge--danger' }, el('span', { text: 'Penjualan ditutup sementara' }))
-        ),
-        catalog.syncedAt ? el('span', { class: 'text-xs text-dim', text: `Sinkron ${formatDate(catalog.syncedAt)}` }) : null
-      );
-
-      renderFilterBar();
-
-      if (!catalog.apps.length) {
-        listArea.replaceChildren(
-          Alert({ tone: 'warning', title: 'Katalog belum tersedia', children: 'Sinkronisasi katalog belum berhasil. Hubungi administrator bila berlanjut.' })
-        );
-        return;
-      }
-      renderApp(catalog.apps[0].id);
-    } catch (err) {
-      listArea.replaceChildren(
-        Alert({ tone: 'danger', title: 'Gagal memuat katalog', children: err instanceof ApiError ? err.message : 'Coba muat ulang halaman.' })
-      );
+    const body = el('div', { class: 'card__body stack' });
+    if (state.pricesMeta?.stale) {
+      body.append(Alert({
+        tone: 'warning',
+        title: 'Menampilkan cache lama',
+        children: state.pricesMeta.lastError
+          ? `Supplier tidak dapat dihubungi (${state.pricesMeta.lastError}). Harga ini belum dikonfirmasi ulang.`
+          : 'Data harga melewati masa cache. Perbarui harga sebelum melanjutkan.'
+      }));
     }
-  };
+    if (state.loading) {
+      body.append(Skeleton({ lines: 4 }));
+    } else {
+      const offers = sortedOffers();
+      if (!offers.length) {
+        body.append(EmptyState({
+          title: 'Tidak ada penawaran',
+          description: 'Supplier belum mengembalikan offer yang valid untuk pilihan ini.',
+          iconName: 'inbox'
+        }));
+      } else {
+        body.append(el('div', { class: 'stack', style: { gap: '8px' } }, ...offers.map((offer, index) => {
+          const available = offer.stock > 0 && state.serverRow?.available && !state.serverRow?.maintenance;
+          const row = el('div', { class: 'copy-field', style: { justifyContent: 'space-between', gap: '12px' } },
+            el('span', { class: 'stack', style: { gap: '3px' } },
+              el('strong', { class: 'mono', text: formatRupiah(offer.salePrice) }),
+              el('span', { class: 'text-xs text-dim', text: `Offer ${index + 1} · stok ${formatNumber(offer.stock)}` })
+            ),
+            available
+              ? (signedIn
+                  ? Button({ variant: 'primary', size: 'sm', iconName: 'zap', children: 'Pilih', onClick: () => openConfirm(offer) })
+                  : Button({ variant: 'outline', size: 'sm', iconName: 'login', children: 'Masuk untuk membeli', onClick: () => goToLogin(offer) }))
+              : Badge({ tone: 'warning', children: offer.stock <= 0 ? 'Stok kosong' : 'Tidak tersedia' })
+          );
+          return row;
+        })));
+      }
+    }
+    if (state.pricesMeta?.fetchedAt) {
+      body.append(el('p', { class: 'text-xs text-dim', text: `Respons diterima ${timestamp(state.pricesMeta.fetchedAt)}${state.pricesMeta.cacheHit ? ' dari cache lokal' : ''}. Harga penjualan diurutkan berdasarkan nilai numerik.` }));
+    }
+    offersCard.replaceChildren(head, body);
+  }
 
-  await load();
+  function sortedOffers() {
+    const offers = state.offers.slice();
+    if (state.availableOnly) {
+      // Keep valid zero-stock offers visible only when the caller explicitly
+      // disables the stock filter; by default they remain available in data.
+      const stocked = offers.filter((offer) => offer.stock > 0);
+      offers.splice(0, offers.length, ...stocked);
+    }
+    if (state.sort === 'price-desc') offers.sort((a, b) => Number(b.salePrice) - Number(a.salePrice));
+    else if (state.sort === 'stock-desc') offers.sort((a, b) => Number(b.stock) - Number(a.stock));
+    else offers.sort((a, b) => Number(a.salePrice) - Number(b.salePrice));
+    return offers;
+  }
 
-  return { node: shell, title: 'Layanan Nokos — FINZZ Store' };
+  function goToLogin(offer) {
+    const next = new URL('/services', window.location.origin);
+    next.searchParams.set('server', String(state.server));
+    next.searchParams.set('app', String(state.app));
+    next.searchParams.set('country', String(state.country));
+    if (offer?.offerId) next.searchParams.set('offer', String(offer.offerId));
+    navigate(`/login?next=${encodeURIComponent(`${next.pathname}${next.search}`)}`);
+  }
+
+  function quoteUrl(offer) {
+    const query = new URLSearchParams({
+      server: String(state.server),
+      app: String(state.app),
+      country: String(state.country),
+      offer_id: String(offer.offerId)
+    });
+    return `/api/public/quote?${query.toString()}`;
+  }
+
+  function openConfirm(offer) {
+    const idempotencyKey = newIdempotencyKey('ord');
+    const country = state.countries.find((item) => String(item.id) === String(state.country));
+    const app = state.apps.find((item) => String(item.id) === String(state.app));
+    const quoteArea = el('div', {}, Skeleton({ lines: 3 }));
+    const errorArea = el('div');
+    let currentQuote = null;
+    let modal;
+    const confirmButton = Button({
+      variant: 'primary', size: 'lg', children: 'Konfirmasi & potong saldo', disabled: true,
+      onClick: async () => {
+        if (!currentQuote || confirmButton.dataset.loading === '1') return;
+        confirmButton.dataset.loading = '1';
+        confirmButton.disabled = true;
+        confirmButton.replaceChildren(el('span', { class: 'btn__spinner' }), el('span', { text: 'Memeriksa & memproses…' }));
+        errorArea.replaceChildren();
+        try {
+          const result = await api.post('/api/orders', {
+            server_id: state.server,
+            app_id: state.app,
+            country_id: Number(state.country),
+            offer_id: offer.offerId,
+            expected_price: currentQuote.price,
+            idempotency_key: idempotencyKey
+          });
+          modal.close();
+          if (result.balance !== null && result.balance !== undefined) store.set({ balance: result.balance });
+          if (result.pending) {
+            toast({ type: 'info', title: 'Sedang dikonfirmasi', message: result.notice?.message || 'Order sedang dikonfirmasi ke supplier.' });
+          } else {
+            toast({ type: 'success', title: 'Order dibuat', message: 'Nomor sedang disiapkan. OTP hanya tersedia di dashboard akun Anda.' });
+          }
+          navigate(`/orders?id=${result.order.id}`);
+        } catch (err) {
+          errorArea.replaceChildren(Alert({
+            tone: 'danger',
+            title: err?.code === 'PRICE_CHANGED' || err?.code === 'OFFER_STALE' ? 'Penawaran berubah' : 'Pembelian belum berhasil',
+            children: err instanceof ApiError ? err.message : 'Coba periksa kembali penawaran.'
+          }));
+          if (['PRICE_CHANGED', 'OFFER_STALE', 'OUT_OF_STOCK'].includes(err?.code)) {
+            currentQuote = null;
+            quoteArea.replaceChildren(
+              Button({ variant: 'outline', children: 'Periksa ulang harga', onClick: () => refreshQuote() })
+            );
+          }
+        } finally {
+          confirmButton.dataset.loading = '0';
+          confirmButton.disabled = !currentQuote || !signedIn || currentQuote.stock <= 0
+            || (currentQuote.source !== 'mock' && !(currentQuote.source === 'telekos' && currentQuote.live === true));
+          confirmButton.replaceChildren(el('span', { text: 'Konfirmasi & potong saldo' }));
+        }
+      }
+    });
+
+    async function refreshQuote() {
+      quoteArea.replaceChildren(Skeleton({ lines: 3 }));
+      errorArea.replaceChildren();
+      confirmButton.disabled = true;
+      currentQuote = null;
+      try {
+        const quote = await api.get(quoteUrl(offer));
+        currentQuote = quote;
+        const rows = [
+          ['Harga saat ini', formatRupiah(quote.price)],
+          ['Stok offer', formatNumber(quote.stock)],
+          ['Server', state.serverRow?.name || state.server]
+        ];
+        const mockSource = quote.source === 'mock';
+        const supplierConfirmed = quote.source === 'telekos' && quote.live === true;
+        const freshnessText = mockSource
+          ? 'Data fixture mock; bukan harga supplier produksi.'
+          : supplierConfirmed
+            ? 'Respons supplier berhasil dikonfirmasi ulang untuk penawaran ini.'
+            : quote.cache?.stale
+              ? `Data cache stale${Number.isFinite(quote.cache.ageSeconds) ? ` (${quote.cache.ageSeconds} dtk)` : ''}; pembelian dinonaktifkan sampai supplier mengonfirmasi.`
+              : 'Harga belum dikonfirmasi oleh supplier; pembelian dinonaktifkan.';
+        quoteArea.replaceChildren(
+          Card({
+            title: mockSource ? 'Harga demo (mock)' : supplierConfirmed ? 'Harga supplier dikonfirmasi' : 'Harga belum dikonfirmasi',
+            subtitle: freshnessText
+          },
+            el('div', { class: 'stack', style: { gap: '8px' } }, ...rows.map(([label, value]) =>
+              el('div', { class: 'row row--between' }, el('span', { class: 'text-sm text-muted', text: label }), el('strong', { class: 'text-sm mono', text: value }))
+            )),
+            quote.cache?.fetchedAt ? el('p', { class: 'text-xs text-dim', text: `Katalog diperoleh: ${timestamp(quote.cache.fetchedAt)}` }) : null,
+            quote.quotedAt ? el('p', { class: 'text-xs text-dim', text: `Waktu quote supplier: ${timestamp(quote.quotedAt)}` }) : null
+          )
+        );
+        confirmButton.disabled = !signedIn || quote.stock <= 0 || (!mockSource && !supplierConfirmed);
+      } catch (err) {
+        quoteArea.replaceChildren(Alert({ tone: 'warning', title: 'Harga belum dapat dikonfirmasi', children: err instanceof ApiError ? err.message : 'Coba muat ulang harga.' }));
+      }
+    }
+
+    const modalBody = el('div', { class: 'stack' },
+      el('div', { class: 'row' },
+        el('span', { class: 'service-card__logo' }, icon(APP_ICON[app?.name] || 'smartphone', { size: 18 })),
+        el('div', {},
+          el('div', { class: 'service-card__name', text: `${app?.name || state.app} · ${country?.name || state.country}` }),
+          el('div', { class: 'service-card__meta', text: `Penawaran supplier ${offer.offerId} · stok ${formatNumber(offer.stock)}` })
+        )
+      ),
+      quoteArea,
+      errorArea,
+      signedIn ? el('p', { class: 'text-xs text-dim', text: `Saldo tersedia ${formatRupiah(store.get('balance') ?? 0)}. Harga akan divalidasi lagi oleh server sebelum pemotongan saldo.` }) : null,
+      el('p', { class: 'text-xs text-dim', text: 'Jika supplier menolak order secara pasti, saldo dikembalikan. Hasil yang belum pasti tetap direkonsiliasi; jangan membuat order pengganti.' })
+    );
+    modal = Modal({
+      title: 'Konfirmasi pembelian',
+      body: modalBody,
+      actions: [Button({ variant: 'ghost', children: 'Batal', onClick: () => modal.close() }), confirmButton]
+    });
+    refreshQuote();
+  }
+
+  async function loadPrices(countryId, { refresh = false } = {}) {
+    state.country = Number(countryId);
+    state.offers = [];
+    state.pricesMeta = null;
+    state.loading = true;
+    const request = ++state.priceRequest;
+    renderCountries();
+    try {
+      const query = new URLSearchParams({ server: String(state.server), app: String(state.app), country: String(state.country) });
+      if (refresh) query.set('refresh', '1');
+      const result = await api.get(`/api/public/catalog/prices?${query.toString()}`);
+      if (request !== state.priceRequest) return;
+      state.offers = result.offers || [];
+      state.pricesMeta = result.cache || null;
+      state.loading = false;
+      state.serverRow = result.server;
+      renderMeta(result.cache);
+      renderCountries();
+      const wantedOffer = params.get('offer');
+      if (wantedOffer) {
+        const matched = state.offers.find((item) => item.offerId === wantedOffer);
+        params.delete('offer');
+        if (matched && signedIn) {
+          // The modal revalidates again; a stale deep link cannot buy directly.
+          openConfirm(matched);
+        } else if (!matched) {
+          toast({ type: 'warning', title: 'Penawaran lama tidak tersedia', message: 'Pilih salah satu harga yang tersedia sekarang.' });
+        }
+      }
+    } catch (err) {
+      if (request !== state.priceRequest) return;
+      state.loading = false;
+      state.pricesMeta = { stale: false };
+      renderCountries();
+      toast({ type: 'error', title: 'Harga tidak tersedia', message: err instanceof ApiError ? err.message : 'Coba muat ulang harga.' });
+    }
+  }
+
+  async function loadCountries(appId) {
+    state.app = appId || null;
+    state.country = null;
+    state.offers = [];
+    state.pricesMeta = null;
+    state.countries = [];
+    renderControls();
+    if (!state.app) return renderCountries();
+    const request = ++state.countryRequest;
+    try {
+      const query = new URLSearchParams({ server: String(state.server), app: String(state.app) });
+      const result = await api.get(`/api/public/catalog/countries?${query.toString()}`);
+      if (request !== state.countryRequest) return;
+      state.countries = result.countries || [];
+      state.countriesMeta = result.cache || null;
+      renderMeta(result.cache);
+      renderControls();
+      renderCountries();
+      const deepCountry = params.get('country');
+      if (deepCountry && state.countries.some((country) => String(country.id) === String(deepCountry))) {
+        await loadPrices(deepCountry);
+      }
+    } catch (err) {
+      if (request !== state.countryRequest) return;
+      catalogArea.replaceChildren(Alert({ tone: 'danger', title: 'Gagal memuat negara', children: err instanceof ApiError ? err.message : 'Coba muat ulang.' }));
+    }
+  }
+
+  async function loadApps(serverId) {
+    state.server = serverId || null;
+    state.app = null;
+    state.country = null;
+    state.apps = [];
+    state.countries = [];
+    state.offers = [];
+    state.pricesMeta = null;
+    renderControls();
+    if (!state.server) return renderCountries();
+    const request = ++state.appRequest;
+    try {
+      const query = new URLSearchParams({ server: String(state.server) });
+      const result = await api.get(`/api/public/catalog/apps?${query.toString()}`);
+      if (request !== state.appRequest) return;
+      state.apps = result.apps || [];
+      renderMeta(result.cache);
+      renderControls();
+      const deepApp = params.get('app');
+      const chosen = state.apps.find((app) => String(app.id) === String(deepApp)) || state.apps[0];
+      if (chosen) await loadCountries(chosen.id);
+      else renderCountries();
+    } catch (err) {
+      if (request !== state.appRequest) return;
+      catalogArea.replaceChildren(Alert({ tone: 'danger', title: 'Gagal memuat aplikasi', children: err instanceof ApiError ? err.message : 'Coba muat ulang.' }));
+    }
+  }
+
+  async function loadServers() {
+    const request = ++state.serverRequest;
+    try {
+      const result = await api.get('/api/public/catalog/servers');
+      if (request !== state.serverRequest) return;
+      state.servers = result.servers || [];
+      renderMeta(result.cache);
+      renderControls();
+      const wanted = params.get('server');
+      const chosen = state.servers.find((server) => String(server.id) === String(wanted))
+        || state.servers.find((server) => server.available && !server.maintenance)
+        || state.servers[0];
+      if (chosen) {
+        state.serverRow = chosen;
+        await loadApps(chosen.id);
+      } else {
+        renderCountries();
+      }
+    } catch (err) {
+      catalogArea.replaceChildren(Alert({
+        tone: 'danger', title: 'Katalog TeleKos tidak tersedia',
+        children: err instanceof ApiError ? err.message : 'Supplier belum mengembalikan data. Coba muat ulang halaman.'
+      }));
+    }
+  }
+
+  loadServers();
+  return { node: shell, title: 'Katalog layanan — FINZZ Store' };
 }

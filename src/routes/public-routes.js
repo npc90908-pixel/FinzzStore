@@ -2,9 +2,10 @@
 // PUBLIC ROUTES — health, public settings, catalogue and live quotes.
 // Nothing here exposes secrets, balances or personal data.
 // ============================================================================
+import * as v from '../validation.js';
 import { AppError, errors } from '../errors.js';
 import { publicConfigView } from '../config.js';
-import { ok } from './helpers.js';
+import { ok, enforceLimit } from './helpers.js';
 
 export function registerPublicRoutes({ router }) {
   router.get('/api/health', async (ctx) => {
@@ -192,22 +193,87 @@ export function registerPublicRoutes({ router }) {
     }
   });
 
-  router.get('/api/public/quote', async (ctx) => {
-    const session = await ctx.requireUser();
-    const limiter = ctx.services.rateLimiter;
-    if (limiter) await limiter.enforce(`quote:${session.user.id}`, 40, 60);
+  // Dynamic TeleKos discovery is public: visitors must be able to browse
+  // server/app/country/price data before creating an account. Each handler
+  // calls only a documented read route in the supplier adapter.
+  router.get('/api/public/catalog/servers', async (ctx) => {
+    await enforceLimit(ctx, `catalog:servers:${ctx.ip}`, 60, 60);
+    return ok(await ctx.services.catalog.readServers());
+  });
 
-    const serviceId = ctx.query.get('service_id');
-    if (!serviceId) throw errors.badRequest('Parameter service_id wajib diisi.', 'MISSING_FIELD');
-    const quote = await ctx.services.catalog.quote({ serviceId });
+  router.get('/api/public/catalog/apps', async (ctx) => {
+    await enforceLimit(ctx, `catalog:apps:${ctx.ip}`, 60, 60);
+    const server = v.string(ctx.query.get('server'), {
+      field: 'server', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+    });
+    return ok(await ctx.services.catalog.readApps({ server }));
+  });
+
+  router.get('/api/public/catalog/countries', async (ctx) => {
+    await enforceLimit(ctx, `catalog:countries:${ctx.ip}`, 60, 60);
+    const server = v.string(ctx.query.get('server'), {
+      field: 'server', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+    });
+    const app = v.string(ctx.query.get('app'), {
+      field: 'app', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+    });
+    return ok(await ctx.services.catalog.readCountries({ server, app }));
+  });
+
+  router.get('/api/public/catalog/prices', async (ctx) => {
+    await enforceLimit(ctx, `catalog:prices:${ctx.ip}`, 30, 60);
+    const server = v.string(ctx.query.get('server'), {
+      field: 'server', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+    });
+    const app = v.string(ctx.query.get('app'), {
+      field: 'app', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+    });
+    const country = v.integer(ctx.query.get('country'), { field: 'country', min: 1, max: 2_147_483_647 });
+    const rawRefresh = ctx.query.get('refresh');
+    const refresh = rawRefresh === null ? false : v.boolean(rawRefresh, { field: 'refresh' });
+    if (refresh) await enforceLimit(ctx, `catalog:refresh:${ctx.ip}`, 6, 60);
+    return ok(await ctx.services.catalog.publicPrices({ server, app, country, refresh }));
+  });
+
+  router.get('/api/public/quote', async (ctx) => {
+    await enforceLimit(ctx, `quote:${ctx.ip}`, 30, 60);
+    const offerId = ctx.query.get('offer_id');
+    let quote;
+    if (offerId) {
+      const server = v.string(ctx.query.get('server'), {
+        field: 'server', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+      });
+      const app = v.string(ctx.query.get('app'), {
+        field: 'app', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/
+      });
+      const country = v.integer(ctx.query.get('country'), { field: 'country', min: 1, max: 2_147_483_647 });
+      const validatedOfferId = v.string(offerId, {
+        field: 'offer_id', min: 1, max: 200, pattern: /^[A-Za-z0-9._:-]+$/
+      });
+      quote = await ctx.services.catalog.quoteOffer({ server, app, country, offerId: validatedOfferId });
+    } else {
+      const serviceId = ctx.query.get('service_id');
+      if (!serviceId) throw errors.badRequest('Konteks penawaran wajib diisi.', 'MISSING_FIELD');
+      quote = await ctx.services.catalog.quote({ serviceId: v.uuid(serviceId, { field: 'service_id' }), refresh: true });
+    }
     return ok({
-      supplierPrice: quote.supplierPrice,
-      markupBps: quote.markupBps,
-      price: quote.price,
+      server: quote.server,
+      app: quote.appId || null,
+      country: quote.countryId || null,
+      offerId: quote.offerId,
+      price: quote.price.totalPrice,
+      currency: 'IDR',
       stock: quote.stock,
-      quotedAt: quote.quotedAt,
+      quotedAt: quote.quotedAt || null,
       live: quote.live,
-      server: quote.server || null
+      source: quote.source || quote.cache?.source || 'mirror',
+      cache: quote.cache ? {
+        fetchedAt: quote.cache.fetchedAt,
+        ageSeconds: quote.cache.ageSeconds,
+        fresh: quote.cache.fresh,
+        stale: quote.cache.stale,
+        refreshInProgress: quote.cache.refreshInProgress
+      } : null
     });
   });
 }

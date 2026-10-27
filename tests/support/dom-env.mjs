@@ -135,7 +135,7 @@ export const FIXTURES = {
     app: { name: 'FINZZ Store', version: '2.0.0' },
     store: { name: 'FINZZ Store', tagline: 'Nomor virtual instan', supportEmail: 'support@finzz.store', supportWhatsapp: null, supportTelegram: null },
     deposit: {
-      minAmount: 10000,
+      minAmount: 1000,
       maxAmount: 5000000,
       instructions: 'Transfer lalu unggah bukti.',
       bankAccounts: [{ bank_name: 'BCA', account_number: '1234567890', account_holder: 'PT FINZZ' }],

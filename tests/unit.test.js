@@ -8,7 +8,7 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHmac } from 'node:crypto';
+import { createHmac, generateKeyPairSync, sign as signJwt } from 'node:crypto';
 
 import {
   parseRupiah, fromDbAmount, applyBps, composePrice, formatRupiah, toDbAmount, MoneyError, MAX_AMOUNT,
@@ -21,6 +21,10 @@ import { redact } from '../src/logging.js';
 import * as v from '../src/validation.js';
 import { mapSupplierStatus, SupplierError } from '../src/supplier-error.js';
 import { createMockSupplier } from '../src/supplier-mock.js';
+import { createSupplierClient } from '../src/supplier.js';
+import { createCatalogService } from '../src/catalog.js';
+import { createOrderService } from '../src/orders.js';
+import { MINIMUM_TOPUP_AMOUNT, normalizeDepositPolicy } from '../src/deposit-policy.js';
 import { PAGES } from '../src/pages.js';
 import { renderDocument } from '../src/render.js';
 import { createLogger } from '../src/logging.js';
@@ -40,6 +44,14 @@ async function walk(dir, filter, out = []) {
   }
   return out;
 }
+
+// -------------------------------------------------------------- deposits -----
+test('deposit policy enforces a Rp1,000 minimum while retaining higher configured limits', () => {
+  assert.equal(MINIMUM_TOPUP_AMOUNT, 1000);
+  assert.equal(normalizeDepositPolicy({ min_amount: 999 }).min_amount, 1000);
+  assert.equal(normalizeDepositPolicy({ min_amount: 1000 }).min_amount, 1000);
+  assert.equal(normalizeDepositPolicy({ min_amount: 10000 }).min_amount, 10000);
+});
 
 // ---------------------------------------------------------------- money -----
 test('money: parseRupiah accepts integer amounts and rejects fractions', () => {
@@ -213,6 +225,153 @@ test('mock supplier: deterministic prices, idempotent purchase, guarded cancel',
   const withOtp = await supplier.getOrder(first.order.id);
   assert.equal(withOtp.otps.length, 1);
   assert.match(withOtp.otps[0].code, /^\d{6}$/);
+});
+
+
+test('TeleKos adapter uses only documented dynamic reads and preserves provider IDs', async () => {
+  const requests = [];
+  const config = { supplier: {
+    baseUrl: 'https://telekos.test/api', apiKey: 'server-only-key', timeoutMs: 1000,
+    mode: 'live', enabled: true, webhookSecret: 'server-only-webhook-secret'
+  } };
+  const fetchImpl = async (input, options = {}) => {
+    const url = new URL(input);
+    requests.push({ url, options });
+    const data = url.pathname.endsWith('/servers')
+      ? [{ id: 'srv-A', name: 'Server A', available: true, maintenance: false }]
+      : url.pathname.endsWith('/apps')
+        ? [{ id: 'wa-id', name: 'WhatsApp' }]
+        : url.pathname.endsWith('/countries')
+          ? [{ id: 61, name: 'Country X', iso: 'CX', calling_code: '+999', stock: 8 }]
+          : [
+              { id: 'price-row-high', offer_id: 'supplier-offer-high', price: 2400, stock: 3 },
+              { id: 'price-row-low', offer_id: 'supplier-offer-low', price: 900, stock: 5 }
+            ];
+    return new Response(JSON.stringify({ data, meta: { quoted_at: '2026-10-27T00:00:00.000Z' } }), {
+      status: 200, headers: { 'content-type': 'application/json' }
+    });
+  };
+  const supplier = createSupplierClient(config, { fetchImpl });
+
+  assert.deepEqual(await supplier.getServers(), [{ id: 'srv-A', name: 'Server A', available: true, maintenance: false }]);
+  assert.deepEqual(await supplier.getApps('srv-A'), [{ id: 'wa-id', name: 'WhatsApp' }]);
+  assert.deepEqual(await supplier.getCountries({ server: 'srv-A', app: 'wa-id' }), [{
+    id: 61, name: 'Country X', iso: 'CX', callingCode: '+999', stock: 8
+  }]);
+  const prices = await supplier.getPrices({ server: 'srv-A', app: 'wa-id', country: 61, refresh: true });
+  assert.deepEqual(prices.offers.map((offer) => [offer.id, offer.offerId, offer.price]), [
+    ['price-row-low', 'supplier-offer-low', 900], ['price-row-high', 'supplier-offer-high', 2400]
+  ]);
+  assert.equal(prices.quotedAt, '2026-10-27T00:00:00.000Z');
+  assert.deepEqual(requests.map(({ url }) => url.pathname), [
+    '/api/servers', '/api/apps', '/api/countries', '/api/prices'
+  ], 'discovery calls only documented TeleKos routes');
+  assert.equal(requests[1].url.searchParams.get('server'), 'srv-A');
+  assert.equal(requests[2].url.searchParams.get('app'), 'wa-id');
+  assert.equal(requests[3].url.searchParams.get('country'), '61');
+  assert.equal(requests[3].url.searchParams.get('refresh'), '1');
+  assert.ok(requests.every(({ options }) => options.headers.Authorization === 'Bearer server-only-key'));
+  assert.equal(supplier.status().contractVerified, true, 'test adapter evidence is local to this client instance');
+  assert.ok(!JSON.stringify(supplier.status()).includes('server-only-key'));
+  assert.ok(!JSON.stringify(supplier.status()).includes('server-only-webhook-secret'));
+
+  let retryCount = 0;
+  const retrying = createSupplierClient(config, {
+    fetchImpl: async () => {
+      retryCount += 1;
+      return retryCount === 1
+        ? new Response(JSON.stringify({ error: { code: 'TEMPORARY' } }), { status: 503 })
+        : new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }
+  });
+  assert.deepEqual(await retrying.getServers(), []);
+  assert.equal(retryCount, 2, 'a transient read receives one bounded retry');
+});
+
+test('dynamic catalogue cache sorts sale prices and labels failed refresh data stale', async () => {
+  const providerQuotedAt = '2026-10-27T00:00:00.000Z';
+  let failPrices = false;
+  const supplier = {
+    mode: 'live', isConfigured: true, isMock: false,
+    async getServers() { return [{ id: 'srv-A', name: 'Server A', available: true, maintenance: false }]; },
+    async getApps() { return [{ id: 'wa-id', name: 'WhatsApp' }]; },
+    async getCountries() { return [{ id: 61, name: 'Country X', iso: 'CX', callingCode: '+999', stock: 5 }]; },
+    async getPrices() {
+      if (failPrices) throw Object.assign(new Error('temporary upstream failure'), { code: 'RATE_LIMITED' });
+      return { quotedAt: providerQuotedAt, offers: [
+        { id: 'high', offerId: 'provider-high', price: 2400, currency: 'IDR', stock: 2 },
+        { id: 'low', offerId: 'provider-low', price: 900, currency: 'IDR', stock: 4 }
+      ] };
+    },
+    status() { return { configured: true }; }
+  };
+  const db = { jobs: { async acquire() { return true; }, async release() { return true; } } };
+  const settings = { async get(key) {
+    if (key === 'pricing_policy') return { default_markup_bps: 1500, tax_bps: 0, category_bps: {} };
+    if (key === 'supplier') return { server: null, allowlist: [] };
+    return {};
+  } };
+  const catalog = createCatalogService({
+    db, supplier, settings, logger: { warn() {}, info() {}, error() {} },
+    config: { supplier: { mode: 'live' }, jobs: {} }
+  });
+
+  const result = await catalog.publicPrices({ server: 'srv-A', app: 'wa-id', country: 61 });
+  assert.deepEqual(result.offers.map((offer) => offer.offerId), ['provider-low', 'provider-high']);
+  assert.ok(result.offers[0].salePrice < result.offers[1].salePrice, 'sale amounts are sorted numerically');
+  assert.ok(!Object.hasOwn(result.offers[0], 'supplierPrice'), 'supplier cost stays private');
+  assert.equal(result.cache.providerQuotedAt, providerQuotedAt);
+  assert.equal(result.cache.fresh, true);
+
+  let leaseAvailable = true;
+  db.jobs.acquire = async () => leaseAvailable;
+  leaseAvailable = false;
+  const quoteDuringOtherRefresh = await catalog.quoteOffer({ server: 'srv-A', app: 'wa-id', country: 61, offerId: 'provider-low' });
+  assert.equal(quoteDuringOtherRefresh.cache.refreshInProgress, true);
+  assert.equal(quoteDuringOtherRefresh.live, false, 'a fresh cache is not treated as a checkout confirmation while another worker refreshes');
+  leaseAvailable = true;
+
+  failPrices = true;
+  const stale = await catalog.readPrices({ server: 'srv-A', app: 'wa-id', country: 61, refresh: true });
+  assert.equal(stale.cache.stale, true, 'failed refresh can only serve explicitly stale cached prices');
+  assert.equal(stale.cache.fresh, false);
+  assert.equal(stale.cache.lastError, 'RATE_LIMITED');
+  const staleQuote = await catalog.quoteOffer({ server: 'srv-A', app: 'wa-id', country: 61, offerId: 'provider-low' });
+  assert.equal(staleQuote.source, 'telekos');
+  assert.equal(staleQuote.live, false, 'a stale last-known offer can be displayed but cannot authorize checkout');
+  assert.equal(staleQuote.cache.stale, true);
+
+  for (let index = 0; index < 510; index += 1) await catalog.readApps({ server: `server-${index}` });
+  assert.ok(catalog.status.cacheEntries <= 500, 'untrusted combinations cannot grow the process cache without bound');
+});
+
+test('order service rejects stale supplier quotes before any wallet/order write', async () => {
+  let writes = 0;
+  const orderService = createOrderService({
+    db: { orders: { async create() { writes += 1; } } },
+    supplier: { isConfigured: true, isMock: false },
+    settings: { async get(key) { return key === 'operations' ? { sales_open: true } : {}; } },
+    catalog: { async quoteOffer() {
+      return {
+        offerId: 'provider-offer', live: false, source: 'telekos',
+        price: { supplierPrice: 900, markupAmount: 135, taxAmount: 0, totalPrice: 1035 },
+        supplierPrice: 900
+      };
+    } },
+    logger: { child() { return this; } },
+    config: { demoMode: false }
+  });
+
+  await assert.rejects(
+    orderService.create({
+      user: { id: 'user-1', role: 'user' },
+      offer: { server: 'srv-A', app: 'wa-id', country: 61, offerId: 'provider-offer' },
+      expectedPrice: 1035,
+      idempotencyKey: 'stale-offer-test-key'
+    }),
+    (err) => err.code === 'QUOTE_UNAVAILABLE' && err.status === 503
+  );
+  assert.equal(writes, 0, 'no wallet debit, ledger row, or order row is attempted');
 });
 
 // ---------------------------------------------------------------- pages -----
@@ -536,7 +695,7 @@ test('mailer verifies SMTP safely, reports the latest result, and sends branded 
   assert.equal(diagnosed.diagnostic.code, 'SMTP_AUTH_PAIR_REQUIRED');
 });
 
-test('Google OAuth exchanges the code server-side with PKCE and requires a verified Google identity', async () => {
+test('Google OAuth exchanges code with PKCE and validates RS256 OIDC signature, claims, nonce, and verified email', async () => {
   const config = loadConfig({
     NODE_ENV: 'test',
     APP_URL: 'https://finzz.test',
@@ -544,45 +703,77 @@ test('Google OAuth exchanges the code server-side with PKCE and requires a verif
     GOOGLE_CLIENT_SECRET: 'client-secret'
   });
   assert.equal(config.oauth.redirectUri, 'https://finzz.test/api/auth/google/callback');
-  const oauth = createGoogleOAuth(config);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'test-kid', alg: 'RS256', use: 'sig' };
+  const makeIdToken = (claims) => {
+    const head = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'test-kid', typ: 'JWT' })).toString('base64url');
+    const body = Buffer.from(JSON.stringify(claims)).toString('base64url');
+    const input = `${head}.${body}`;
+    const signature = signJwt('RSA-SHA256', Buffer.from(input), privateKey).toString('base64url');
+    return `${input}.${signature}`;
+  };
+  let idToken = makeIdToken({
+    iss: 'https://accounts.google.com', aud: 'client-id', exp: nowSeconds + 300, iat: nowSeconds,
+    nonce: 'expected-nonce', sub: 'google-subject', email: 'Person@Example.test',
+    email_verified: true, name: 'Nama Google'
+  });
   const calls = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, options = {}) => {
+  const fetchImpl = async (url, options = {}) => {
     calls.push({ url: String(url), options });
-    if (String(url).includes('oauth2.googleapis.com/token')) {
-      return new Response(JSON.stringify({ access_token: 'private-access-token' }), {
+    if (String(url).includes('/token')) {
+      return new Response(JSON.stringify({ id_token: idToken, access_token: 'private-access-token' }), {
         status: 200, headers: { 'content-type': 'application/json' }
       });
     }
-    return new Response(JSON.stringify({
-      sub: 'google-subject', email: 'Person@Example.test', email_verified: true, name: 'Nama Google'
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    assert.match(String(url), /\/certs$/);
+    return new Response(JSON.stringify({ keys: [jwk] }), {
+      status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=600' }
+    });
   };
+  const oauth = createGoogleOAuth(config, { fetchImpl, now: () => nowSeconds * 1000 });
 
-  try {
-    assert.equal(oauth.available, true);
-    const authorize = new URL(oauth.authorizeUrl({ state: 'state', codeChallenge: 'challenge' }));
-    assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
-    const identity = await oauth.authenticate('authorization-code', 'secret-verifier');
-    assert.deepEqual(identity, { provider: 'google', email: 'person@example.test', name: 'Nama Google' });
-    assert.equal(calls.length, 2);
-    const tokenBody = new URLSearchParams(calls[0].options.body);
-    assert.equal(tokenBody.get('code'), 'authorization-code');
-    assert.equal(tokenBody.get('client_secret'), 'client-secret');
-    assert.equal(tokenBody.get('code_verifier'), 'secret-verifier');
-    assert.match(calls[1].options.headers.Authorization, /^Bearer private-access-token$/);
-    assert.ok(!JSON.stringify(identity).includes('private-access-token'), 'provider tokens never leave the server');
+  assert.equal(oauth.available, true);
+  const authorize = new URL(oauth.authorizeUrl({ state: 'state', codeChallenge: 'challenge', nonce: 'expected-nonce' }));
+  assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(authorize.searchParams.get('nonce'), 'expected-nonce');
+  const identity = await oauth.authenticate('authorization-code', 'secret-verifier', 'expected-nonce');
+  assert.deepEqual(identity, {
+    provider: 'google', providerSubject: 'google-subject', email: 'person@example.test', name: 'Nama Google'
+  });
+  assert.equal(calls.length, 2, 'token exchange and JWKS are the only provider calls');
+  const tokenBody = new URLSearchParams(calls[0].options.body);
+  assert.equal(tokenBody.get('code'), 'authorization-code');
+  assert.equal(tokenBody.get('client_secret'), 'client-secret');
+  assert.equal(tokenBody.get('code_verifier'), 'secret-verifier');
+  assert.equal(calls[1].options.headers.Authorization, undefined, 'JWKS lookup does not send a browser/provider token');
+  assert.ok(!JSON.stringify(identity).includes('private-access-token'), 'provider tokens never leave the server');
 
-    globalThis.fetch = async (url) => String(url).includes('oauth2.googleapis.com/token')
-      ? new Response(JSON.stringify({ access_token: 'private-access-token' }), { status: 200 })
-      : new Response(JSON.stringify({ sub: 'google-subject', email: 'person@example.test', email_verified: false }), { status: 200 });
-    await assert.rejects(() => oauth.authenticate('authorization-code', 'secret-verifier'), (err) => err.code === 'OAUTH_EMAIL_UNVERIFIED');
+  idToken = makeIdToken({
+    iss: 'https://accounts.google.com', aud: 'client-id', exp: nowSeconds + 300, iat: nowSeconds,
+    nonce: 'expected-nonce', sub: 'google-subject', email: 'person@example.test', email_verified: false
+  });
+  await assert.rejects(
+    () => oauth.authenticate('authorization-code', 'secret-verifier', 'expected-nonce'),
+    (err) => err.code === 'OAUTH_EMAIL_UNVERIFIED'
+  );
+  idToken = makeIdToken({
+    iss: 'https://accounts.google.com', aud: 'client-id', exp: nowSeconds + 300, iat: nowSeconds,
+    nonce: 'another-nonce', sub: 'google-subject', email: 'person@example.test', email_verified: true
+  });
+  await assert.rejects(
+    () => oauth.authenticate('authorization-code', 'secret-verifier', 'expected-nonce'),
+    (err) => err.code === 'OAUTH_PROFILE_INVALID'
+  );
 
-    globalThis.fetch = async () => new Response('x'.repeat(70 * 1024), { status: 200 });
-    await assert.rejects(() => oauth.authenticate('authorization-code', 'secret-verifier'), (err) => err.code === 'OAUTH_PROVIDER_FAILED');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const oversizedOAuth = createGoogleOAuth(config, {
+    now: () => nowSeconds * 1000,
+    fetchImpl: async () => new Response('x'.repeat(70 * 1024), { status: 200 })
+  });
+  await assert.rejects(
+    () => oversizedOAuth.authenticate('authorization-code', 'secret-verifier', 'expected-nonce'),
+    (err) => err.code === 'OAUTH_PROVIDER_FAILED'
+  );
 });
 
 

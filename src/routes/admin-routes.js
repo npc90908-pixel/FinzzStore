@@ -8,6 +8,7 @@ import { errors } from '../errors.js';
 import { ValidationError } from '../validation.js';
 import { parsePage, enforceLimit, ok, accepted, adminMeta } from './helpers.js';
 import { fromDbAmount, resolvePrice, describePricing } from '../money.js';
+import { MINIMUM_TOPUP_AMOUNT } from '../deposit-policy.js';
 
 const SETTING_VALIDATORS = {
   store_profile: (value) => ({
@@ -18,7 +19,7 @@ const SETTING_VALIDATORS = {
     support_telegram: v.string(value.support_telegram ?? '', { field: 'support_telegram', max: 60, optional: true }) || ''
   }),
   deposit_policy: (value) => {
-    const min = v.money(value.min_amount, { field: 'min_amount', min: 1000, max: 100_000_000 });
+    const min = v.money(value.min_amount, { field: 'min_amount', min: MINIMUM_TOPUP_AMOUNT, max: 100_000_000 });
     const max = v.money(value.max_amount, { field: 'max_amount', min: min, max: 1_000_000_000 });
     const accounts = v.arrayOf(value.bank_accounts ?? [], { field: 'bank_accounts', max: 5 });
     return {

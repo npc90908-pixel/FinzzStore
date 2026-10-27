@@ -17,12 +17,28 @@ export function registerOrderRoutes({ router }) {
     await enforceLimit(ctx, `order:create:${session.user.id}`, 15, 10 * 60, { critical: true });
 
     const body = await ctx.readJson({ limit: 8 * 1024 });
-    const serviceId = v.uuid(body.service_id, { field: 'service_id' });
+    const serviceId = body.service_id ? v.uuid(body.service_id, { field: 'service_id' }) : null;
     const idempotencyKey = v.idempotencyKey(body.idempotency_key);
+    let offer = null;
+    if (body.offer_id !== undefined) {
+      offer = {
+        server: v.string(body.server_id, { field: 'server_id', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/ }),
+        app: v.string(body.app_id, { field: 'app_id', min: 1, max: 80, pattern: /^[A-Za-z0-9._:-]+$/ }),
+        country: v.integer(body.country_id, { field: 'country_id', min: 1, max: 2_147_483_647 }),
+        offerId: v.string(body.offer_id, { field: 'offer_id', min: 1, max: 200, pattern: /^[A-Za-z0-9._:-]+$/ })
+      };
+    }
+    if (!serviceId && !offer) throw errors.badRequest('service_id atau data penawaran wajib diisi.', 'MISSING_FIELD');
+    if (serviceId && offer) throw errors.badRequest('Kirim hanya satu jenis konteks penawaran.', 'INVALID_INPUT');
+    const expectedPrice = body.expected_price === undefined
+      ? null
+      : v.money(body.expected_price, { field: 'expected_price', min: 1 });
 
     const result = await ctx.services.orders.create({
       user: session.profile,
       serviceId,
+      offer,
+      expectedPrice,
       idempotencyKey,
       ip: ctx.ip,
       userAgent: ctx.userAgent

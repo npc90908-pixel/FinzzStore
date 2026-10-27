@@ -15,101 +15,144 @@ import { safeReturnPath } from '../validation.js';
 const OAUTH_STATE_COOKIE = 'fz_oauth_state';
 const OAUTH_NEXT_COOKIE = 'fz_oauth_next';
 const OAUTH_VERIFIER_COOKIE = 'fz_oauth_verifier';
+const OAUTH_NONCE_COOKIE = 'fz_oauth_nonce';
+const OAUTH_PURPOSE_COOKIE = 'fz_oauth_purpose';
 const OAUTH_STATE_TTL_SECONDS = 600;
+
+function setOauthFlowCookies(ctx, { state, verifier, nonce, next = '/dashboard', purpose = 'login' }) {
+  const common = {
+    secure: ctx.config.cookie.secure,
+    sameSite: 'Lax',
+    path: '/',
+    httpOnly: true,
+    maxAge: OAUTH_STATE_TTL_SECONDS
+  };
+  appendCookies(ctx.res, [
+    serializeCookie(OAUTH_STATE_COOKIE, state, common),
+    serializeCookie(OAUTH_NEXT_COOKIE, safeReturnPath(next), common),
+    serializeCookie(OAUTH_VERIFIER_COOKIE, verifier, common),
+    serializeCookie(OAUTH_NONCE_COOKIE, nonce, common),
+    serializeCookie(OAUTH_PURPOSE_COOKIE, purpose, common)
+  ]);
+}
+
+function clearOauthFlowCookies(ctx) {
+  const common = { secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true };
+  appendCookies(ctx.res, [
+    clearCookie(OAUTH_STATE_COOKIE, common),
+    clearCookie(OAUTH_NEXT_COOKIE, common),
+    clearCookie(OAUTH_VERIFIER_COOKIE, common),
+    clearCookie(OAUTH_NONCE_COOKIE, common),
+    clearCookie(OAUTH_PURPOSE_COOKIE, common)
+  ]);
+}
 
 export function registerAuthRoutes({ router }) {
 
-  // ------------------------------------------------------------ Google OAuth
-  // Both endpoints are GET navigations (browser → Google → browser), so they
-  // carry no CSRF token: the signed/state cookie below is the CSRF defence.
+  // ------------------------------------------------------------ Google OIDC
+  // Login uses state + nonce + PKCE in HttpOnly cookies. Linking begins with
+  // an authenticated, CSRF-protected POST and records the current FINZZ user
+  // and session in a short-lived cookie; the callback must still see that same
+  // session before an identity can be attached.
   router.get(
     '/api/auth/google',
     async (ctx) => {
       const oauth = ctx.services.googleOAuth;
       if (!oauth?.available) throw errors.notFound('Login Google belum dikonfigurasi.');
       await enforceLimit(ctx, `oauth:start:${ctx.ip}`, 15, 10 * 60);
-
       const state = randomToken(24);
-      const codeVerifier = randomToken(32);
-      const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
-      const next = safeReturnPath(ctx.query.get('next'));
-      appendCookies(ctx.res, [
-        serializeCookie(OAUTH_STATE_COOKIE, state, {
-          secure: ctx.config.cookie.secure,
-          sameSite: 'Lax',
-          path: '/',
-          httpOnly: true,
-          maxAge: OAUTH_STATE_TTL_SECONDS
-        }),
-        serializeCookie(OAUTH_NEXT_COOKIE, next, {
-          secure: ctx.config.cookie.secure,
-          sameSite: 'Lax',
-          path: '/',
-          httpOnly: true,
-          maxAge: OAUTH_STATE_TTL_SECONDS
-        }),
-        serializeCookie(OAUTH_VERIFIER_COOKIE, codeVerifier, {
-          secure: ctx.config.cookie.secure,
-          sameSite: 'Lax',
-          path: '/',
-          httpOnly: true,
-          maxAge: OAUTH_STATE_TTL_SECONDS
-        })
-      ]);
-      ctx.res.writeHead(302, { Location: oauth.authorizeUrl({ state, codeChallenge }), 'Cache-Control': 'no-store' });
+      const verifier = randomToken(32);
+      const nonce = randomToken(32);
+      const codeChallenge = createHash('sha256').update(verifier).digest('base64url');
+      setOauthFlowCookies(ctx, {
+        state, verifier, nonce,
+        next: safeReturnPath(ctx.query.get('next')),
+        purpose: 'login'
+      });
+      ctx.res.writeHead(302, {
+        Location: oauth.authorizeUrl({ state, codeChallenge, nonce }),
+        'Cache-Control': 'no-store'
+      });
       ctx.res.end();
     },
     { public: true }
   );
 
+  router.post('/api/auth/google/link', async (ctx) => {
+    const session = await ctx.requireUser();
+    await ctx.readJson({ limit: 1024 });
+    await enforceLimit(ctx, `oauth:link:${session.user.id}`, 5, 10 * 60, { critical: true });
+    const oauth = ctx.services.googleOAuth;
+    if (!oauth?.available) throw errors.notFound('Login Google belum dikonfigurasi.');
+    const state = randomToken(24);
+    const verifier = randomToken(32);
+    const nonce = randomToken(32);
+    const codeChallenge = createHash('sha256').update(verifier).digest('base64url');
+    setOauthFlowCookies(ctx, {
+      state, verifier, nonce, next: '/profile?oauth=linked',
+      purpose: `link:${session.profile.id}:${session.session.id}`
+    });
+    return ok({ authorizeUrl: oauth.authorizeUrl({ state, codeChallenge, nonce }) });
+  });
+
   router.get(
     '/api/auth/google/callback',
     async (ctx) => {
       const oauth = ctx.services.googleOAuth;
-      const clearOauthCookies = () => appendCookies(ctx.res, [
-        clearCookie(OAUTH_STATE_COOKIE, {
-          secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true
-        }),
-        clearCookie(OAUTH_NEXT_COOKIE, {
-          secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true
-        }),
-        clearCookie(OAUTH_VERIFIER_COOKIE, {
-          secure: ctx.config.cookie.secure, sameSite: 'Lax', path: '/', httpOnly: true
-        })
-      ]);
-      const backToLogin = (reason) => {
-        clearOauthCookies();
-        ctx.res.writeHead(302, { Location: `/login?oauth=${encodeURIComponent(reason)}`, 'Cache-Control': 'no-store' });
+      const purpose = ctx.cookies[OAUTH_PURPOSE_COOKIE] || 'login';
+      const linkMatch = /^link:([0-9a-f-]{36}):([0-9a-f-]{36})$/i.exec(purpose);
+      const redirect = (location) => {
+        clearOauthFlowCookies(ctx);
+        ctx.res.writeHead(302, { Location: location, 'Cache-Control': 'no-store' });
         ctx.res.end();
       };
-      if (!oauth?.available) return backToLogin('unavailable');
+      const redirectError = (reason) => redirect(`${linkMatch ? '/profile' : '/login'}?oauth=${encodeURIComponent(reason)}`);
+      if (!oauth?.available) return redirectError('unavailable');
 
       const code = ctx.query.get('code') || '';
       const state = ctx.query.get('state') || '';
       const expectedState = ctx.cookies[OAUTH_STATE_COOKIE] || '';
-      const codeVerifier = ctx.cookies[OAUTH_VERIFIER_COOKIE] || '';
+      const verifier = ctx.cookies[OAUTH_VERIFIER_COOKIE] || '';
+      const nonce = ctx.cookies[OAUTH_NONCE_COOKIE] || '';
       const providerError = ctx.query.get('error');
       const stateBytes = Buffer.from(state);
       const expectedBytes = Buffer.from(expectedState);
       const stateMatches = stateBytes.length > 0
         && stateBytes.length === expectedBytes.length
         && timingSafeEqual(stateBytes, expectedBytes);
-      if (!stateMatches || !codeVerifier) return backToLogin('state');
-      if (providerError) return backToLogin('denied');
-      if (!code) return backToLogin('state');
+      if (!stateMatches || !verifier || !nonce) return redirectError('state');
+      if (providerError) return redirectError('denied');
+      if (!code) return redirectError('state');
 
       try {
-        const identity = await oauth.authenticate(code, codeVerifier);
+        const identity = await oauth.authenticate(code, verifier, nonce);
+        if (linkMatch) {
+          const session = await ctx.requireUser();
+          if (session.profile.id !== linkMatch[1] || session.session.id !== linkMatch[2]) {
+            return redirectError('link-session');
+          }
+          await ctx.services.auth.linkProvider({ auth: session, identity, req: ctx.req });
+          return redirect('/profile?oauth=linked');
+        }
+
         const result = await ctx.services.auth.loginWithProvider({ ...identity, req: ctx.req });
         setSessionCookies(ctx.res, ctx.config, result);
-        clearOauthCookies();
         const next = safeReturnPath(ctx.cookies[OAUTH_NEXT_COOKIE]);
+        clearOauthFlowCookies(ctx);
         ctx.res.writeHead(302, { Location: next, 'Cache-Control': 'no-store' });
         ctx.res.end();
       } catch (err) {
-        ctx.logger?.warn?.('google oauth callback failed', { code: err?.code || null });
-        const reason = err?.code === 'OAUTH_EMAIL_UNVERIFIED' ? 'unverified' : 'failed';
-        return backToLogin(reason);
+        ctx.logger?.warn?.('google oidc callback rejected', { code: err?.code || null });
+        if (linkMatch) {
+          const reason = err?.code === 'OAUTH_IDENTITY_CONFLICT' ? 'conflict' : 'link-failed';
+          return redirectError(reason);
+        }
+        const reason = err?.code === 'OAUTH_EMAIL_UNVERIFIED'
+          ? 'unverified'
+          : err?.code === 'OAUTH_LINK_REQUIRED'
+            ? 'link-required'
+            : 'failed';
+        return redirectError(reason);
       }
     },
     { public: true }
@@ -254,6 +297,22 @@ export function registerAuthRoutes({ router }) {
         userAgent: session.session.user_agent
       }
     });
+  });
+
+  router.get('/api/auth/identities', async (ctx) => {
+    const session = await ctx.requireUser();
+    return ok({ loginMethods: await ctx.services.auth.listLoginMethods(session.user.id) });
+  });
+
+  router.post('/api/auth/google/unlink', async (ctx) => {
+    const session = await ctx.requireUser();
+    await enforceLimit(ctx, `oauth:unlink:${session.user.id}`, 5, 10 * 60, { critical: true });
+    const body = await ctx.readJson({ limit: 8 * 1024 });
+    const password = body.password === undefined || body.password === null || body.password === ''
+      ? null
+      : v.password(body.password, { field: 'password' });
+    const result = await ctx.services.auth.unlinkProvider({ auth: session, provider: 'google', password, req: ctx.req });
+    return ok({ ...result, message: 'Google berhasil dilepas dari akun ini.' });
   });
 
   router.post(
