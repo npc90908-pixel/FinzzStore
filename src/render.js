@@ -7,7 +7,7 @@
 // ============================================================================
 import { escapeHtml, safeJsonForHtml } from './security.js';
 
-const CSS_FILES = ['/css/tokens.css', '/css/style.css', '/css/components.css', '/css/skeleton.css', '/css/responsive.css'];
+const CSS_FILES = ['/css/tokens.css', '/css/style.css', '/css/components.css', '/css/effects.css', '/css/skeleton.css', '/css/responsive.css'];
 
 export function renderDocument({
   page,
@@ -36,7 +36,7 @@ export function renderDocument({
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#0b0d12">
+<meta name="theme-color" content="#06070d">
 <title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(description)}">
 <meta name="robots" content="${meta?.requiresAuth ? 'noindex, nofollow' : 'index, follow'}">
@@ -55,10 +55,10 @@ ${CSS_FILES.map((href) => `<link rel="stylesheet" href="${href}">`).join('\n')}
     <div class="boot-splash__logo" aria-hidden="true">
       <svg viewBox="0 0 48 48" width="44" height="44" role="img" aria-label="FINZZ Store">
         <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#6d8bff"/><stop offset="1" stop-color="#22d3a6"/>
+          <stop offset="0" stop-color="#7c8cff"/><stop offset="1" stop-color="#2ee6b6"/>
         </linearGradient></defs>
         <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#bg)"/>
-        <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#0b0d12"/>
+        <path d="M16 33V15h16v4.6H21.2v3.1h9.3v4.6h-9.3V33z" fill="#06070d"/>
       </svg>
     </div>
     <p class="boot-splash__text">Memuat FINZZ Store…</p>

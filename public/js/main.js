@@ -24,6 +24,10 @@ const PAGE_MODULES = {
   privacy: () => import('./pages/privacy.js'),
   status: () => import('./pages/status.js'),
   notifications: () => import('./pages/notifications.js'),
+  tentang: () => import('./pages/tentang.js'),
+  bantuan: () => import('./pages/bantuan.js'),
+  keamanan: () => import('./pages/keamanan.js'),
+  kontak: () => import('./pages/kontak.js'),
   'not-found': () => import('./pages/not-found.js'),
   forbidden: () => import('./pages/forbidden.js'),
   error: () => import('./pages/not-found.js')
@@ -44,6 +48,10 @@ const ROUTE_MAP = {
   '/admin': 'admin',
   '/status': 'status',
   '/notifications': 'notifications',
+  '/tentang': 'tentang',
+  '/bantuan': 'bantuan',
+  '/keamanan': 'keamanan',
+  '/kontak': 'kontak',
   '/terms': 'terms',
   '/privacy': 'privacy'
 };
@@ -68,7 +76,7 @@ function readCookie(name) {
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f8fc' : '#0b0d12');
+  if (meta) meta.setAttribute('content', theme === 'light' ? '#f4f7fe' : '#06070d');
 }
 
 async function bootstrap() {

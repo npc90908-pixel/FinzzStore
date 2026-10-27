@@ -2,6 +2,7 @@
 // PRIVACY POLICY — static copy describing what is actually stored.
 // ============================================================================
 import { el } from '../ui.js';
+import { icon } from '../icons.js';
 
 const SECTIONS = [
   {
@@ -54,18 +55,23 @@ const SECTIONS = [
 
 export default async function privacy(ctx) {
   const { layout } = ctx;
-  const page = el('div', { class: 'page page--narrow' },
+  const page = el('div', { class: 'page page--narrow animate-rise' },
     el('div', { class: 'page__head' },
       el('div', {},
-        el('h1', { class: 'page__title', text: 'Kebijakan Privasi' }),
+        el('span', { class: 'eyebrow' }, el('span', { class: 'eyebrow__dot' }), el('span', { text: 'Dokumen legal' })),
+        el('div', { class: 'row', style: { gap: '12px', marginTop: '14px' } },
+          el('span', { class: 'feature-tile feature-tile--mint feature-tile--lg' }, icon('shield', { size: 22 })),
+          el('h1', { class: 'page__title', text: 'Kebijakan Privasi' })),
         el('p', { class: 'page__subtitle', text: 'Ringkasan data yang diproses FINZZ Store dan cara kami melindunginya.' })
       )
     ),
     el('article', { class: 'prose' },
       SECTIONS.map((section) =>
-        el('section', {},
-          el('h2', { text: section.title }),
-          el('ul', {}, section.items.map((item) => el('li', { text: item })))
+        el('section', { class: 'card' },
+          el('div', { class: 'card__body' },
+            el('h2', { text: section.title }),
+            el('ul', {}, section.items.map((item) => el('li', { text: item })))
+          )
         )
       )
     )

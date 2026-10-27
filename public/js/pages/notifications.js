@@ -9,7 +9,7 @@
 // No polling timer: the page loads once, offers "Muat ulang", and marks rows
 // read through explicit POSTs (idempotent, scoped to the session's user).
 // ============================================================================
-import { el, Badge, Button, Card, EmptyState, Skeleton, Alert, toast } from '../ui.js';
+import { el, Badge, Button, Card, EmptyState, Skeleton, Alert, toast, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { formatDate, timeAgo } from '../store.js';
 
@@ -208,13 +208,14 @@ export default async function notificationsPage(ctx) {
     listArea.replaceChildren(list);
   };
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: 'Notifikasi' }),
-        el('p', { class: 'page__subtitle', text: 'Kabar dari peristiwa nyata di akun Anda — order, OTP, dan deposit. Tanpa pengingat karangan.' })
-      )
-    ),
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Kotak masuk',
+      iconName: 'inbox',
+      tone: 'info',
+      title: 'Notifikasi',
+      subtitle: 'Kabar dari peristiwa nyata di akun Anda — order, OTP, dan deposit. Tanpa pengingat karangan.'
+    }),
     summaryArea,
     errorArea,
     listArea

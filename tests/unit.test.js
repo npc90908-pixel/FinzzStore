@@ -193,12 +193,12 @@ test('mock supplier: deterministic prices, idempotent purchase, guarded cancel',
 });
 
 // ---------------------------------------------------------------- pages -----
-test('page registry: 16 routes with correct access flags', () => {
+test('page registry: 20 routes with correct access flags', () => {
   const keys = Object.keys(PAGES).sort();
   assert.deepEqual(keys, [
-    '/', '/admin', '/dashboard', '/forgot-password', '/login', '/notifications', '/orders',
-    '/privacy', '/profile', '/register', '/reset-password', '/services', '/status', '/terms',
-    '/verify-email', '/wallet'
+    '/', '/admin', '/bantuan', '/dashboard', '/forgot-password', '/keamanan', '/kontak',
+    '/login', '/notifications', '/orders', '/privacy', '/profile', '/register',
+    '/reset-password', '/services', '/status', '/tentang', '/terms', '/verify-email', '/wallet'
   ]);
   assert.equal(PAGES['/status'].requiresAuth, false, 'the status page is public');
   assert.equal(PAGES['/'].requiresAuth, false);

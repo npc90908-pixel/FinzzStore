@@ -1,7 +1,7 @@
 // ============================================================================
 // WALLET — balance, manual deposit (proof upload), history.
 // ============================================================================
-import { el, Button, Badge, Card, Table, Skeleton, EmptyState, Alert, toast, FileUpload, Input, Textarea, runWithLoading, fieldError, Pagination } from '../ui.js';
+import { el, Button, Badge, Card, Table, Skeleton, EmptyState, Alert, toast, FileUpload, Input, Textarea, runWithLoading, fieldError, Pagination, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { ApiError } from '../api.js';
@@ -16,14 +16,15 @@ export default async function walletPage(ctx) {
   const depositHistoryArea = el('div', {}, new Skeleton({ lines: 4 }));
   const txArea = el('div', {}, new Skeleton({ lines: 6 }));
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: 'Saldo & deposit' }),
-        el('p', { class: 'page__subtitle', text: 'Semua perubahan saldo tercatat pada ledger. Deposit manual diverifikasi admin sebelum dikreditkan.' })
-      ),
-      Button({ variant: 'outline', iconName: 'refresh', children: 'Muat ulang', onClick: () => load() })
-    ),
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Dompet',
+      iconName: 'wallet',
+      tone: 'mint',
+      title: 'Saldo & deposit',
+      subtitle: 'Semua perubahan saldo tercatat pada ledger. Deposit manual diverifikasi admin sebelum dikreditkan.',
+      actions: Button({ variant: 'outline', iconName: 'refresh', children: 'Muat ulang', onClick: () => load() })
+    }),
     el('div', { class: 'grid grid--sidebar' },
       el('div', { class: 'stack' }, balanceCard, txArea),
       el('div', { class: 'stack' }, policyArea)

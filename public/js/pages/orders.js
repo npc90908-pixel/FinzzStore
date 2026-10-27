@@ -3,7 +3,7 @@
 // The browser polls the API every 4s while visible; the supplier is only
 // contacted by the server (background poller) or by an explicit, throttled sync.
 // ============================================================================
-import { el, Button, Badge, Card, Table, Skeleton, EmptyState, Modal, Alert, toast, CopyField } from '../ui.js';
+import { el, Button, Badge, Card, Table, Skeleton, EmptyState, Modal, Alert, toast, CopyField, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { createOrderPoller } from '../poller.js';
@@ -30,17 +30,17 @@ export default async function ordersPage(ctx) {
   const filterRow = el('div', { class: 'pill-row' });
   const liveBadge = Badge({ tone: 'brand', dot: true, pulse: true, children: 'Live 4s' });
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: 'Order & OTP' }),
-        el('p', { class: 'page__subtitle', text: 'Kode verifikasi hanya dapat dilihat oleh pemilik order. Halaman diperbarui otomatis saat order masih aktif.' })
-      ),
-      el('div', { class: 'row' },
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Pesanan',
+      iconName: 'receipt',
+      title: 'Order & OTP',
+      subtitle: 'Kode verifikasi hanya dapat dilihat oleh pemilik order. Halaman diperbarui otomatis saat order masih aktif.',
+      actions: el('div', { class: 'row' },
         liveBadge,
         Button({ variant: 'primary', iconName: 'plus', children: 'Order baru', onClick: () => navigate('/services') })
       )
-    ),
+    }),
     filterRow,
     el('div', { class: 'grid grid--sidebar' }, listArea, detailArea)
   );

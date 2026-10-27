@@ -572,12 +572,33 @@ export function KeyValue({ items }) {
   return dl;
 }
 
-export function PageHeader({ title, subtitle = null, actions = null }) {
+export function PageHeader({ title, subtitle = null, actions = null, iconName = null, eyebrow = null, tone = 'brand' }) {
   return el(
     'div',
-    { class: 'page__head' },
-    el('div', {}, el('h1', { class: 'page__title', text: title }), subtitle ? el('p', { class: 'page__subtitle', text: subtitle }) : null),
+    { class: 'page__head page-hero' },
+    el('div', { class: 'page-hero__inner' },
+      el('div', { class: 'page-hero__glow' }),
+      eyebrow
+        ? el('span', { class: 'eyebrow' }, el('span', { class: 'eyebrow__dot' }), el('span', { text: eyebrow }))
+        : null,
+      el('div', { class: 'row', style: { gap: '14px', marginTop: eyebrow ? '16px' : '0' } },
+        iconName ? el('span', { class: `feature-tile feature-tile--lg feature-tile--${tone}` }, icon(iconName, { size: 22 })) : null,
+        el('div', {},
+          el('h1', { class: 'page__title', text: title }),
+          subtitle ? el('p', { class: 'page__subtitle', text: subtitle }) : null
+        )
+      )
+    ),
     actions ? el('div', { class: 'row row--wrap' }, actions) : null
+  );
+}
+
+/** Compact gradient icon tile used inside cards and marketing sections. */
+export function IconTile({ name, tone = 'brand', size = 20, large = false }) {
+  return el(
+    'span',
+    { class: `feature-tile${large ? ' feature-tile--lg' : ''} feature-tile--${tone}` },
+    icon(name, { size: large ? 22 : size })
   );
 }
 

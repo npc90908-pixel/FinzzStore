@@ -17,8 +17,9 @@ const APP_NAV = [
 const PUBLIC_NAV = [
   { href: '/#layanan', label: 'Layanan' },
   { href: '/#cara-kerja', label: 'Cara Kerja' },
-  { href: '/#faq', label: 'FAQ' },
-  { href: '/terms', label: 'Ketentuan' }
+  { href: '/tentang', label: 'Tentang' },
+  { href: '/bantuan', label: 'Bantuan' },
+  { href: '/#faq', label: 'FAQ' }
 ];
 
 export function createLayout({ store, navigate, onLogout, onToggleTheme, getTheme }) {
@@ -280,6 +281,7 @@ export function createLayout({ store, navigate, onLogout, onToggleTheme, getThem
         el('div', { class: 'container row row--between row--wrap' },
           el('span', { class: 'text-xs text-dim', text: `© ${new Date().getFullYear()} FINZZ Store. Semua hak dilindungi.` }),
           el('div', { class: 'row' },
+            el('a', { class: 'text-xs', attrs: { href: '/bantuan' }, text: 'Bantuan' }),
             el('a', { class: 'text-xs', attrs: { href: '/terms' }, text: 'Ketentuan', onClick: (e) => { e.preventDefault(); navigate('/terms'); } }),
             el('a', { class: 'text-xs', attrs: { href: '/privacy' }, text: 'Privasi', onClick: (e) => { e.preventDefault(); navigate('/privacy'); } }),
             el('a', { class: 'text-xs', attrs: { href: '/status' }, text: 'Status', onClick: (e) => { e.preventDefault(); navigate('/status'); } }),
@@ -309,22 +311,25 @@ export function createLayout({ store, navigate, onLogout, onToggleTheme, getThem
             el('ul', {},
               el('li', {}, el('a', { attrs: { href: '/#layanan' }, text: 'Katalog layanan' })),
               el('li', {}, el('a', { attrs: { href: '/#cara-kerja' }, text: 'Cara kerja' })),
-              el('li', {}, el('a', { attrs: { href: '/#kebijakan' }, text: 'Kebijakan refund' }))
+              el('li', {}, el('a', { attrs: { href: '/#kebijakan' }, text: 'Kebijakan refund' })),
+              el('li', {}, el('a', { attrs: { href: '/keamanan' }, text: 'Keamanan' }))
             )
           ),
-          el('div', {}, el('h4', { text: 'Akun' }),
+          el('div', {}, el('h4', { text: 'Perusahaan' }),
             el('ul', {},
+              el('li', {}, el('a', { attrs: { href: '/tentang' }, text: 'Tentang FINZZ' })),
+              el('li', {}, el('a', { attrs: { href: '/kontak' }, text: 'Kontak' })),
+              el('li', {}, el('a', { attrs: { href: '/status' }, text: 'Status layanan', onClick: (e) => { e.preventDefault(); navigate('/status'); } })),
               el('li', {}, el('a', { attrs: { href: '/login' }, text: 'Masuk', onClick: (e) => { e.preventDefault(); navigate('/login'); } })),
-              el('li', {}, el('a', { attrs: { href: '/register' }, text: 'Daftar', onClick: (e) => { e.preventDefault(); navigate('/register'); } })),
-              el('li', {}, el('a', { attrs: { href: '/wallet' }, text: 'Deposit saldo', onClick: (e) => { e.preventDefault(); navigate('/wallet'); } }))
+              el('li', {}, el('a', { attrs: { href: '/register' }, text: 'Daftar', onClick: (e) => { e.preventDefault(); navigate('/register'); } }))
             )
           ),
           el('div', {}, el('h4', { text: 'Bantuan' }),
             el('ul', {},
+              el('li', {}, el('a', { attrs: { href: '/bantuan' }, text: 'Pusat bantuan' })),
               el('li', {}, el('a', { attrs: { href: '/#faq' }, text: 'FAQ' })),
               el('li', {}, el('a', { attrs: { href: '/terms' }, text: 'Ketentuan layanan', onClick: (e) => { e.preventDefault(); navigate('/terms'); } })),
               el('li', {}, el('a', { attrs: { href: '/privacy' }, text: 'Kebijakan privasi', onClick: (e) => { e.preventDefault(); navigate('/privacy'); } })),
-              el('li', {}, el('a', { attrs: { href: '/status' }, text: 'Status layanan', onClick: (e) => { e.preventDefault(); navigate('/status'); } })),
               supportEmail ? el('li', {}, el('a', { attrs: { href: `mailto:${supportEmail}` }, text: supportEmail })) : null
             )
           )

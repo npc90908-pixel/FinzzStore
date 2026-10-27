@@ -12,12 +12,12 @@ const HERO_ART = `
 <svg viewBox="0 0 420 380" role="img" aria-label="Ilustrasi nomor virtual dan kode OTP" class="hero-art">
   <defs>
     <linearGradient id="heroCard" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6d8bff" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#22d3a6" stop-opacity="0.12"/>
+      <stop offset="0" stop-color="#7c8cff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#2ee6b6" stop-opacity="0.12"/>
     </linearGradient>
     <linearGradient id="heroScreen" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6d8bff"/>
-      <stop offset="1" stop-color="#22d3a6"/>
+      <stop offset="0" stop-color="#7c8cff"/>
+      <stop offset="1" stop-color="#2ee6b6"/>
     </linearGradient>
   </defs>
   <rect x="30" y="24" width="360" height="330" rx="26" fill="url(#heroCard)" stroke="rgba(148,163,198,0.22)"/>
@@ -37,17 +37,17 @@ const HERO_ART = `
   <g opacity="0.95">
     <rect x="252" y="150" width="128" height="52" rx="12" fill="#0f1420" stroke="rgba(148,163,198,0.28)"/>
     <circle cx="274" cy="170" r="9" fill="rgba(34,211,166,0.2)" stroke="rgba(34,211,166,0.5)"/>
-    <path d="m270 170 3 3 5-6" stroke="#22d3a6" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+    <path d="m270 170 3 3 5-6" stroke="#2ee6b6" stroke-width="1.8" fill="none" stroke-linecap="round"/>
     <rect x="290" y="163" width="70" height="6" rx="3" fill="rgba(148,163,198,0.35)"/>
     <rect x="290" y="176" width="48" height="6" rx="3" fill="rgba(148,163,198,0.2)"/>
     <rect x="252" y="212" width="128" height="52" rx="12" fill="#0f1420" stroke="rgba(148,163,198,0.28)"/>
     <circle cx="274" cy="232" r="9" fill="rgba(109,139,255,0.2)" stroke="rgba(109,139,255,0.5)"/>
-    <path d="M270 232h8M274 228v8" stroke="#6d8bff" stroke-width="1.8" stroke-linecap="round"/>
+    <path d="M270 232h8M274 228v8" stroke="#7c8cff" stroke-width="1.8" stroke-linecap="round"/>
     <rect x="290" y="225" width="62" height="6" rx="3" fill="rgba(148,163,198,0.35)"/>
     <rect x="290" y="238" width="40" height="6" rx="3" fill="rgba(148,163,198,0.2)"/>
   </g>
-  <circle cx="70" cy="86" r="4" fill="#22d3a6" opacity="0.7"/>
-  <circle cx="358" cy="300" r="5" fill="#6d8bff" opacity="0.6"/>
+  <circle cx="70" cy="86" r="4" fill="#2ee6b6" opacity="0.7"/>
+  <circle cx="358" cy="300" r="5" fill="#7c8cff" opacity="0.6"/>
   <circle cx="84" cy="286" r="3" fill="#b18cff" opacity="0.7"/>
 </svg>`;
 
@@ -64,14 +64,24 @@ const APPS_ICON = {
   Grab: 'zap'
 };
 
-function sectionHead(title, lead, { center = false } = {}) {
+function sectionHead(title, lead, { center = false, eyebrow = 'FINZZ Store' } = {}) {
   return el(
     'div',
-    { class: `section__head${center ? ' section__head--center' : ''}` },
-    el('h2', { class: 'section__title', text: title }),
+    { class: `section__head animate-rise${center ? ' section__head--center' : ''}` },
+    el('span', { class: 'eyebrow' }, el('span', { class: 'eyebrow__dot' }), el('span', { text: eyebrow })),
+    el('h2', { class: 'section__title', style: { marginTop: '14px' }, text: title }),
     lead ? el('p', { class: 'section__lead', text: lead }) : null
   );
 }
+
+const FEATURES = [
+  { icon: 'zap', tone: 'brand', title: 'Nomor terbit instan', text: 'Order diteruskan ke supplier begitu saldo cukup. Nomor aktif dalam hitungan detik tanpa proses manual.' },
+  { icon: 'smartphoneCheck', tone: 'mint', title: 'OTP tampil sendiri', text: 'Kode verifikasi ditarik otomatis dan muncul di dashboard serta notifikasi, tanpa memuat ulang halaman.' },
+  { icon: 'wallet', tone: 'violet', title: 'Ledger yang bisa diaudit', text: 'Setiap debit, kredit, dan refund berpasangan di buku besar. Saldo tidak pernah berubah tanpa jejak.' },
+  { icon: 'refresh', tone: 'info', title: 'Refund otomatis', text: 'Order tanpa OTP ditutup sistem dan dananya kembali ke dompet Anda, dicatat maksimal sekali per order.' },
+  { icon: 'shield', tone: 'warning', title: 'Akun terlindungi', text: 'Password Argon2id, sesi HttpOnly, token CSRF, dan pembatas laju percobaan login.' },
+  { icon: 'activity', tone: 'brand', title: 'Status apa adanya', text: 'Halaman status menampilkan kondisi supplier dan pembayaran yang sebenarnya, termasuk saat gangguan.' }
+];
 
 export default async function landing(ctx) {
   const { api, store, navigate, layout } = ctx;
@@ -129,7 +139,11 @@ export default async function landing(ctx) {
             el('span', { class: 'hero__meta-label', text: 'refund otomatis tanpa OTP' }))
         )
       ),
-      el('div', { class: 'hero__art', html: HERO_ART })
+      el('div', { class: 'hero__art hero-art-wrap' },
+        el('div', { class: 'float-chip float-chip--tl' }, icon('check', { size: 14 }), el('span', { text: 'OTP masuk otomatis' })),
+        el('div', { class: 'float-chip float-chip--br' }, icon('refresh', { size: 14 }), el('span', { text: 'Refund tanpa OTP' })),
+        el('div', { html: HERO_ART })
+      )
     )
   );
   main.appendChild(hero);
@@ -168,13 +182,46 @@ export default async function landing(ctx) {
     );
   };
 
+  // ------------------------------------------------------------- features
+  main.appendChild(
+    el('section', { class: 'section', attrs: { id: 'fitur' } },
+      el('div', { class: 'container' },
+        sectionHead('Mengapa penjual memilih FINZZ Store', 'Enam alasan yang semuanya bisa Anda verifikasi sendiri lewat halaman status, keamanan, dan panduan bantuan.', { center: true, eyebrow: 'Keunggulan' }),
+        el('div', { class: 'grid grid--3' },
+          FEATURES.map((feature, i) =>
+            el('div', { class: 'feature-card lift animate-rise', style: { '--d': `${(i % 3) * 80}ms` } },
+              el('span', { class: `feature-tile feature-tile--${feature.tone}` }, icon(feature.icon, { size: 20 })),
+              el('h3', { text: feature.title }),
+              el('p', { class: 'text-muted', text: feature.text })
+            )
+          )
+        ),
+        el('div', { class: 'row row--wrap', style: { justifyContent: 'center', marginTop: '32px', gap: '12px' } },
+          el('a', {
+            class: 'btn btn--outline',
+            attrs: { href: '/keamanan' },
+            text: 'Baca praktik keamanan',
+            onClick: (e) => { e.preventDefault(); navigate('/keamanan'); }
+          }, icon('shield', { size: 16 })),
+          el('a', {
+            class: 'btn btn--ghost',
+            attrs: { href: '/bantuan' },
+            text: 'Pusat bantuan',
+            onClick: (e) => { e.preventDefault(); navigate('/bantuan'); }
+          }, icon('arrowRight', { size: 16 }))
+        )
+      )
+    )
+  );
+
   // -------------------------------------------------------------- catalogue
   const catalogSection = el('section', { class: 'section', attrs: { id: 'layanan' } });
   catalogSection.appendChild(
     el('div', { class: 'container' },
       sectionHead(
         'Katalog layanan dan negara',
-        'Daftar di bawah dimuat langsung dari katalog supplier yang tersinkron. Harga sudah termasuk markup layanan; stok dapat berubah setiap saat.'
+        'Daftar di bawah dimuat langsung dari katalog supplier yang tersinkron. Harga sudah termasuk markup layanan; stok dapat berubah setiap saat.',
+        { eyebrow: 'Katalog' }
       ),
       el('div', { attrs: { id: 'catalog-body' } }, el('div', { class: 'skeleton skeleton-block' }))
     )
@@ -191,7 +238,7 @@ export default async function landing(ctx) {
   main.appendChild(
     el('section', { class: 'section section--alt', attrs: { id: 'cara-kerja' } },
       el('div', { class: 'container' },
-        sectionHead('Empat langkah, tanpa aplikasi tambahan', 'Semua berjalan di browser: order, nomor, OTP, dan riwayat saldo.'),
+        sectionHead('Empat langkah, tanpa aplikasi tambahan', 'Semua berjalan di browser: order, nomor, OTP, dan riwayat saldo.', { eyebrow: 'Cara kerja' }),
         el('div', { class: 'step-list' }, steps.map((s) => el('div', { class: 'step' }, el('h4', { text: s.title }), el('p', { text: s.text }))))
       )
     )
@@ -201,7 +248,7 @@ export default async function landing(ctx) {
   main.appendChild(
     el('section', { class: 'section', attrs: { id: 'kebijakan' } },
       el('div', { class: 'container' },
-        sectionHead('Kebijakan saldo, deposit, dan refund', 'Aturan ini berlaku pada setiap transaksi dan ditegakkan oleh sistem, bukan hanya oleh admin.'),
+        sectionHead('Kebijakan saldo, deposit, dan refund', 'Aturan ini berlaku pada setiap transaksi dan ditegakkan oleh sistem, bukan hanya oleh admin.', { eyebrow: 'Kebijakan' }),
         el('div', { class: 'grid grid--3' },
           el('div', { class: 'card' },
             el('div', { class: 'card__body' },
@@ -235,7 +282,7 @@ export default async function landing(ctx) {
   main.appendChild(
     el('section', { class: 'section section--alt', attrs: { id: 'faq' } },
       el('div', { class: 'container container--narrow' },
-        sectionHead('Pertanyaan yang sering diajukan', null, { center: true }),
+        sectionHead('Pertanyaan yang sering diajukan', null, { center: true, eyebrow: 'FAQ' }),
         el('div', { class: 'faq' },
           faqs.map(([q, a]) =>
             el('details', { class: 'faq__item' },

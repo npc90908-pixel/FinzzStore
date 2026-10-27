@@ -2,7 +2,7 @@
 // ADMIN PANEL — every action is re-authorised on the server; the UI only
 // reflects what the backend allows. All mutations are audited.
 // ============================================================================
-import { el, Button, Badge, Card, StatCard, Table, Tabs, Input, Select, Textarea, Checkbox, Modal, Alert, toast, Skeleton, EmptyState, runWithLoading, KeyValue } from '../ui.js';
+import { el, Button, Badge, Card, StatCard, Table, Tabs, Input, Select, Textarea, Checkbox, Modal, Alert, toast, Skeleton, EmptyState, runWithLoading, KeyValue, PageHeader } from '../ui.js';
 import { icon } from '../icons.js';
 import { appShell } from './_app-shell.js';
 import { ApiError, newIdempotencyKey } from '../api.js';
@@ -25,14 +25,15 @@ export default async function adminPage(ctx) {
   const body = el('div', { class: 'stack' }, new Skeleton({ lines: 8 }));
   const tabBar = Tabs({ items: TABS, active: state.tab, onChange: (id) => { state.tab = id; renderTabs(); renderBody(); } });
 
-  const content = el('div', { class: 'page' },
-    el('div', { class: 'page__head' },
-      el('div', {},
-        el('h1', { class: 'page__title', text: 'Panel admin' }),
-        el('p', { class: 'page__subtitle', text: 'Ringkasan transaksi aktual, persetujuan deposit, pengelolaan layanan, dan audit log.' })
-      ),
-      Badge({ tone: 'brand', dot: true, children: 'Admin' })
-    ),
+  const content = el('div', { class: 'page animate-rise' },
+    PageHeader({
+      eyebrow: 'Administrasi',
+      iconName: 'settings',
+      tone: 'warning',
+      title: 'Panel admin',
+      subtitle: 'Ringkasan transaksi aktual, persetujuan deposit, pengelolaan layanan, dan audit log.',
+      actions: Badge({ tone: 'brand', dot: true, children: 'Admin' })
+    }),
     el('div', { class: 'scroll-x' }, tabBar),
     body
   );
