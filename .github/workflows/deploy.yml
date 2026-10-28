@@ -37,9 +37,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
 
-      - run: npm ci
+      - name: Install dependencies (no committed lockfile)
+        run: npm install --no-audit --no-fund --package-lock=false
 
       - name: Static checks + tests
         run: |

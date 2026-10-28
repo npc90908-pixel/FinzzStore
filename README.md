@@ -520,10 +520,11 @@ has been ported and its API/security tests pass. The EJS shell still hydrates
 existing progressive frontend modules under `public/js/`, so this change does
 not imply every UI screen has been rewritten as an EJS page.
 
-Runtime dependencies now include `express`, `ejs`, and `qrcode`. Run `npm install`
-once with registry access to regenerate `package-lock.json`, then commit the
-resulting lockfile. CI refreshes the lockfile before `npm ci` because the audit
-workspace could not reach the npm registry to resolve the new dependency tree.
+Runtime dependencies now include `express`, `ejs`, and `qrcode`. The current
+`main` branch does not track `package-lock.json`, so use `npm install` (not
+`npm ci`) to install dependencies. CI and the deploy workflow use the same
+lockfile-free install command. A committed lockfile would make installs more
+reproducible; if one is restored, switch those workflows back to `npm ci`.
 
 AstraPay wallet invoices render QRIS locally from the provider payload. The
 browser polls FINZZ's authenticated wallet API while a payment is pending; only

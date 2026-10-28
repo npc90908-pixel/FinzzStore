@@ -3,12 +3,17 @@
 // FINZZ STORE V2 — Express.js entry point with EJS rendering.
 // Node.js 24, ES Modules. See README.md for deployment.
 // ============================================================================
+// Vercel's Express builder inspects recognized entrypoints for a direct import.
+import express from 'express';
 import { createServer } from 'node:http';
 import { ConfigError } from './src/config.js';
 import { createLogger } from './src/logging.js';
 import { createApplication } from './src/bootstrap.js';
 import { invokeExpressApp } from './src/express-app.js';
 import { loadOptionalEnvFile } from './src/env.js';
+
+// Keeps this serverless entrypoint discoverable by Vercel's Express builder.
+void express;
 
 let envFileError = null;
 try {

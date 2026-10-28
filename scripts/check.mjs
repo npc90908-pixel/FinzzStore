@@ -73,7 +73,7 @@ for (const dir of ['src']) {
 }
 notes.push('source tree is pure ESM');
 
-// ----------------------------------------------------------- 4. no framework
+// -------------------------------------------------------- 4. runtime deps
 const pkg = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8'));
 const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
 for (const name of ['express', 'ejs', 'qrcode']) {
@@ -86,7 +86,7 @@ notes.push(`dependencies: ${deps.join(', ') || 'none'}`);
 // --------------------------------------------------------------- 5. engines
 if (pkg.type !== 'module') fail('package.json must declare "type": "module"');
 if (!/>=24/.test(pkg.engines?.node || '')) fail('package.json must pin engines.node to Node 24.x');
-if (!existsSync(path.join(ROOT, 'package-lock.json'))) fail('package-lock.json is missing (npm ci needs it)');
+if (!existsSync(path.join(ROOT, 'package-lock.json'))) notes.push('package-lock.json is absent; install with npm install, not npm ci');
 for (const script of ['start', 'dev', 'test', 'check', 'audit']) {
   if (!pkg.scripts?.[script]) fail(`package.json is missing the "${script}" script`);
 }
