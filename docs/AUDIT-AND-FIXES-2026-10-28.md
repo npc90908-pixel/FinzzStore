@@ -15,7 +15,7 @@ Date: 2026-10-28
 - Updated the in-memory database driver to reject nonzero fees just like PostgreSQL.
 - Updated deployment preflight: TeleKos webhook secret is optional when polling is used; TeleKos API key remains required for the live supplier path. AstraPay credentials are optional until automatic payment is enabled.
 - Updated Vercel function file inclusion to include EJS templates under `views/**`.
-- Regenerated `package-lock.json` in the import workflow; CI remains on its normal `npm ci` path with the committed lockfile.
+- The import workflow regenerated `package-lock.json`; a later main commit removed it. CI and deploy now use lockfile-free `npm install` commands to match the current repository state.
 
 ## Checks completed here
 
