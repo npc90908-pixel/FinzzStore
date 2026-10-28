@@ -14,7 +14,7 @@ import {
   parseRupiah, fromDbAmount, applyBps, composePrice, formatRupiah, toDbAmount, MoneyError, MAX_AMOUNT,
   resolvePrice, normalisePricingPolicy, describePricing, ROUNDING_MODES
 } from '../src/money.js';
-import { escapeHtml, safeJsonForHtml, sha256, assertRequestOrigin, originAllowed, requestOriginAllowed, securityHeaders } from '../src/security.js';
+import { escapeHtml, safeJsonForHtml, sha256, assertRequestOrigin, originAllowed, requestOriginAllowed, securityHeaders, clientIp } from '../src/security.js';
 import { buildCsp } from '../src/http.js';
 import { loadConfig, publicConfigView } from '../src/config.js';
 import { redact } from '../src/logging.js';
@@ -33,6 +33,7 @@ import { createGoogleOAuth } from '../src/auth-google.js';
 import { loadOptionalEnvFile } from '../src/env.js';
 import { createMailer, diagnoseSmtpError, passwordResetEmail, verificationEmail } from '../src/auth/mailer.js';
 import { createPaymentAdapter } from '../src/payment/adapter.js';
+import { normalizeSupabasePoolerUrl } from '../src/bootstrap.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -91,6 +92,24 @@ test('money: db amounts round-trip without floating point drift', () => {
 });
 
 // ------------------------------------------------------------- security -----
+test('security: client IP extraction tolerates Vercel requests with a null socket', () => {
+  const req = { headers: { 'x-forwarded-for': '203.0.113.12, 10.0.0.1' }, socket: null };
+  Object.defineProperty(req, 'ip', { get() { throw new Error('Express req.ip must not be accessed'); } });
+  assert.equal(clientIp(req, { trustProxy: true }), '203.0.113.12');
+  assert.equal(clientIp({ headers: {}, socket: null }, { trustProxy: false }), '0.0.0.0');
+});
+
+test('Vercel automatically uses Supabase transaction pooler instead of session mode', () => {
+  const sessionUrl = 'postgresql://finzz:password@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require';
+  const transactionUrl = normalizeSupabasePoolerUrl(sessionUrl, true);
+  assert.equal(new URL(transactionUrl).port, '6543');
+  assert.equal(new URL(transactionUrl).password, 'password');
+  assert.equal(new URL(transactionUrl).searchParams.get('sslmode'), 'require');
+  assert.equal(normalizeSupabasePoolerUrl(sessionUrl, false), sessionUrl);
+  const direct = 'postgresql://finzz:password@db.example.supabase.co:5432/postgres';
+  assert.equal(normalizeSupabasePoolerUrl(direct, true), direct);
+});
+
 test('security: html escaping and JSON-in-HTML escaping', () => {
   assert.equal(escapeHtml('<img src=x onerror="alert(1)">'), '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
   const payload = safeJsonForHtml({ a: '</script><script>alert(1)</script>', b: '&<>' });

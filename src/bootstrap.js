@@ -29,22 +29,31 @@ import { createRateLimiter } from './security.js';
 import { mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
-function isSupabaseSessionPooler(connectionString) {
+export function normalizeSupabasePoolerUrl(connectionString, isVercel) {
+  if (!isVercel || typeof connectionString !== 'string') return connectionString;
   try {
     const url = new URL(connectionString);
-    return url.hostname.toLowerCase().endsWith('.pooler.supabase.com') && url.port === '5432';
+    if (url.hostname.toLowerCase().endsWith('.pooler.supabase.com') && url.port === '5432') {
+      // Supabase's 5432 endpoint is session mode; Vercel serverless instances
+      // must share the transaction pooler to avoid exhausting session clients.
+      url.port = '6543';
+      return url.toString();
+    }
   } catch {
-    return false;
+    // Config validation reports malformed connection strings elsewhere.
   }
+  return connectionString;
 }
 
 export async function createApplication({ env = process.env, logger, supplierOptions = null, paymentOptions = null } = {}) {
   if (!logger) throw new Error('createApplication requires a logger');
   const config = loadConfig(env);
-  if (config.isVercel && isSupabaseSessionPooler(config.database.connectionString)) {
-    logger.warn(
-      'Supabase session-mode pooler detected on Vercel; use the transaction-mode DATABASE_URL (port 6543) to avoid the session client limit.'
-    );
+  const runtimeConnectionString = normalizeSupabasePoolerUrl(config.database.connectionString, config.isVercel);
+  const databaseConfig = runtimeConnectionString === config.database.connectionString
+    ? config
+    : { ...config, database: { ...config.database, connectionString: runtimeConnectionString } };
+  if (databaseConfig !== config) {
+    logger.warn('Supabase session-mode pooler detected on Vercel; using transaction mode on port 6543.');
   }
 
   // Custom authentication is the only auth path now: Supabase Auth is not used
@@ -52,7 +61,7 @@ export async function createApplication({ env = process.env, logger, supplierOpt
   // exists only for the local demo and the test suite.
   let db;
   if (config.database.connectionString && !config.demoMode) {
-    db = createPgDatabase(config, { logger });
+    db = createPgDatabase(databaseConfig, { logger });
   } else {
     db = createMemoryDatabase({ logger });
   }

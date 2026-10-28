@@ -14,6 +14,7 @@
 // routes, middlewares and the SPA need no changes.
 // ============================================================================
 import { AppError, errors } from './errors.js';
+import { clientIp } from './security.js';
 import {
   hashPassword, verifyPassword, needsRehash,
   randomToken, generateOtp, sha256, safeEqualHex
@@ -23,6 +24,11 @@ import { verificationEmail, passwordResetEmail, maskEmail } from './auth/mailer.
 export function createAuthService({ db, config, logger, mailer, turnstile }) {
   const now = () => Date.now();
   const authConfig = config.auth;
+  // Use the same Vercel-safe IP resolver as rate limiting; Express's req.ip
+  // dereferences req.socket and can throw when Vercel supplies a socketless request.
+  const requestIp = (req) => req
+    ? clientIp({ headers: req.headers || {}, socket: req.socket || null }, config)
+    : null;
 
   // --------------------------------------------------------------- helpers
   const sessionExpiry = () => new Date(now() + config.cookie.maxAgeSeconds * 1000).toISOString();
@@ -61,7 +67,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       user_id: userId,
       token_hash: sha256(token),
       csrf_hash: sha256(csrfToken),
-      ip: req?.ip || null,
+      ip: requestIp(req),
       user_agent: String(req?.headers?.['user-agent'] || '').slice(0, 300) || null,
       expires_at: sessionExpiry()
     });
@@ -86,7 +92,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       p_token_hash: tokenHash,
       p_ttl_seconds: ttl,
       p_max_attempts: authConfig.maxAttempts,
-      p_ip: req?.ip || null,
+      p_ip: requestIp(req),
       p_user_agent: String(req?.headers?.['user-agent'] || '').slice(0, 300) || null
     });
 
@@ -147,7 +153,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       tokenHash,
       email: profile.email,
       ttlSeconds: VERIFY_TTL_SECONDS,
-      ip: req?.ip || null,
+      ip: requestIp(req),
       userAgent: req?.headers?.['user-agent'] || null
     });
 
@@ -259,7 +265,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
 
     // ------------------------------------------------------------ register
     async register({ email, password, username, req, turnstileToken }) {
-      const captcha = await turnstile.verify(turnstileToken, { ip: req?.ip, action: 'register' });
+      const captcha = await turnstile.verify(turnstileToken, { ip: requestIp(req), action: 'register' });
       if (!captcha.ok) throw errors.badRequest('Verifikasi keamanan gagal. Muat ulang halaman.', captcha.code);
 
       if (await db.profiles.byEmail(email).catch(() => null)) {
@@ -309,7 +315,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
 
     // --------------------------------------------------------------- login
     async login({ email, password, req, turnstileToken }) {
-      const captcha = await turnstile.verify(turnstileToken, { ip: req?.ip, action: 'login' });
+      const captcha = await turnstile.verify(turnstileToken, { ip: requestIp(req), action: 'login' });
       if (!captcha.ok) throw errors.badRequest('Verifikasi keamanan gagal. Muat ulang halaman.', captcha.code);
 
       const row = await db.profiles.byEmailWithSecret(email);
@@ -407,7 +413,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
           targetId: existing.id,
           reason: 'Google subject is not linked; explicit account linking is required',
           after: { provider: 'google', email: normalised },
-          ip: req?.ip || null,
+          ip: requestIp(req),
           userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
         });
         throw new AppError(
@@ -437,7 +443,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
             username,
             providerSubject: subject,
             name,
-            ip: req?.ip || null,
+            ip: requestIp(req),
             userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
           });
           break;
@@ -458,7 +464,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
               targetId: racedEmail.id,
               reason: 'Concurrent account creation requires explicit Google linking',
               after: { provider: 'google', email: normalised },
-              ip: req?.ip || null,
+              ip: requestIp(req),
               userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
             });
             throw new AppError(
@@ -493,7 +499,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
           await auditAuthEvent({
             adminId: null, action: 'oauth.google.login_email_conflict', targetType: 'user', targetId: raced.id,
             reason: 'Existing FINZZ account requires explicit Google linking',
-            after: { provider: 'google', email: normalised }, ip: req?.ip || null,
+            after: { provider: 'google', email: normalised }, ip: requestIp(req),
             userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
           });
           throw new AppError('OAUTH_LINK_REQUIRED', 'Masuk ke akun FINZZ yang sudah ada, lalu tautkan Google dari Profil.', 409);
@@ -534,7 +540,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
         providerSubject: String(identity.providerSubject),
         email: String(identity.email).toLowerCase(),
         name: identity.name || null,
-        ip: req?.ip || null,
+        ip: requestIp(req),
         userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
       });
       if (result?.conflict) {
@@ -559,7 +565,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
       }
       const result = await db.oauthIdentities.unlink({
         userId: auth.profile.id,
-        ip: req?.ip || null,
+        ip: requestIp(req),
         userAgent: String(req?.headers?.['user-agent'] || '').slice(0, 300)
       });
       if (!result?.unlinked) {
@@ -726,7 +732,7 @@ export function createAuthService({ db, config, logger, mailer, turnstile }) {
      * account, and the raw value never leaves the server except through SMTP.
      */
     async requestPasswordReset(email, { req, turnstileToken } = {}) {
-      const captcha = await turnstile.verify(turnstileToken, { ip: req?.ip, action: 'forgot_password' });
+      const captcha = await turnstile.verify(turnstileToken, { ip: requestIp(req), action: 'forgot_password' });
       if (!captcha.ok) throw errors.badRequest('Verifikasi keamanan gagal. Muat ulang halaman.', captcha.code);
 
       const row = await db.profiles.byEmailWithSecret(email).catch(() => null);
